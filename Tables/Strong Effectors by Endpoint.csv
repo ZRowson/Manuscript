@@ -1,0 +1,23 @@
+"","Assay Endpoint Name","Signal Direction","Chemical Name","Concentration (μM)","SEs from Control Mean"
+"1","AUC_r","up","Loperamide",40,5.24
+"2","AUC_r","down","Polybrominated diphenyl ether (PBDE)-47",4,-4.67
+"3","avgA_D","up","Chlorpyrifos (ethyl)",1.2,4.33
+"4","avgA_D","down","Bis(tributyltin) Oxide",0.03072,-2.73
+"5","avgA_L","up","Amphetamine",1.2,4.69
+"6","avgA_L","down","Heptachlor",1.2,-3.86
+"7","avgS_D","up","Paraquat",120,5.57
+"8","avgS_D","down","Polybrominated diphenyl ether (PBDE)-47",4,-7.71
+"9","avgS_L","up","Amphetamine",1.2,2.96
+"10","avgS_L","down","Fluoxetine",4,-6.26
+"11","avgS_T","up","Paraquat",120,4.89
+"12","avgS_T","down","6-Aminonicotinamide",40,-6.68
+"13","hbt_D","up","5-Fluorouracil",1.2,2.09
+"14","hbt_D","down","Paraquat",4,-4.79
+"15","hbt_L","up","Cocaine base",0.12,2.02
+"16","hbt_L","down","Fluoxetine",4,-5.61
+"17","strtlA","up","D-sorbitol",0.12,4.23
+"18","strtlA","down","Diethylstilbesterol",3,-3.54
+"19","strtlAavg","up","Paraquat",40,4.73
+"20","strtlAavg","down","Tebuconazole",12,-4.26
+"21","strtlF","up","Loperamide",40,4.47
+"22","strtlF","down","Triethyltin",0.012,-3.53

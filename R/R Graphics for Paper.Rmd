@@ -1,0 +1,641 @@
+---
+title: "R Graphics for Manuscript"
+author: "Zachary Rowson"
+date: "6/7/2022"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE)
+library(gabi)
+library(data.table)
+library(DT)
+library(sjPlot)
+library(ComplexHeatmap)
+library(gridExtra)
+library(viridis)
+library(grid)
+```
+
+## Introduction
+
+This document will contain graphics produced in R to be included in the manuscript. Note that these are not all the graphics to be included, some were produced in PowerPoint and have been saved as image files.
+
+```{r, load-necessary-data}
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/raw data/Padilla_DNT60_lmr0_egid.Rdata")
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_tcplfits.rda")
+refer_chem <- as.data.table( read.csv("~/Desktop/StephanieProjects/DNT60Analysis/results analysis/data/refer_chem.csv") )
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_rows_n.rda")
+```
+
+## Example Locomotor Response Data
+
+```{r, Fluoxetine-SA-timeSeries}
+chemical <- "Fluoxetine"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(data[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(data), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- data[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+plot <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=3) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 14))
+
+plot
+```
+
+## Example tcpl Curve-Fit
+
+```{r, example-curve-fit, warning=FALSE}
+tcplfit <- tcplfits_n[["Fluoxetine"]][["avgS_L"]]
+tcplfit[["plot"]]
+summary <- subset( tcplfit[["summary"]], select = -c(conc,resp) )
+summary
+```
+
+## BMC Heatmap
+
+```{r, load-BMC-data}
+ac <- c("AUC_L","avgS_L", "avgA_L", "avgJ_L","hbt_L",
+        "strtlA","strtlAavg", "strtlF",
+        "AUC_D", "avgS_D","avgA_D", "avgJ_D", "hbt_D",
+        "AUC_T","avgS_T","AUC_r")
+
+## Gather BMC's
+bmd <- lapply(tcplfits_n, function(chm) unlist(lapply(chm, function(fit) {
+  hitcall <- fit[["summary"]]$hitcall
+  bmd <- fit[["summary"]]$bmd
+  if (!(hitcall>0.8 & !is.na(bmd) & bmd != 0)) {
+    bmd <- 10000
+  }
+  bmd
+})))
+bmd <- do.call("rbind", bmd)
+bmd <- log10(bmd[, ac])
+bmd <- bmd[,-c(1,9,14)]
+
+# Identify active chemicals
+actives <- rownames(bmd)[apply(bmd, 1, function(row) any(row < 4))]
+
+# Isolate data of interest
+to.fit <- bmd
+
+# PBDE-47 name is too long
+rownames(bmd)[6] <- "PBDE-47"
+actives[6] <- "PBDE-47"
+
+
+```
+```{r, layer-matrix}
+# Create a matrix specifying if an up, down, up and down, or down and up arrow should be printed in cells.
+to.fit <- lapply(tcplfits_n, function(chm) chm[-c(1,9,14)])
+layer.mat <- lapply(to.fit, function(chm) unlist(lapply(chm, function(fit) {
+                hitcall <- fit[["summary"]]$hitcall
+                fit_method <- fit[["summary"]]$fit_method
+                dir <- sign(fit[["summary"]]$top)
+                if (hitcall>0.8 & fit_method=="gnls" & dir==1) {
+                  layer <- 0
+                } else if (hitcall>0.8 & fit_method=="gnls" & dir==-1) {
+                  layer <- 1
+                } else if (hitcall>0.8 & dir==1) {
+                  layer <- 2
+                } else if (hitcall>0.8 & dir==-1) {
+                  layer <- 3
+                } else layer <- 4
+              })))
+layer.mat <- do.call("rbind", layer.mat)
+rownames(layer.mat)[6] <- "PBDE-47" # Change PBDE-47 name to match BMD matrix
+layer.mat1 <- layer.mat[row.names(layer.mat) %in% actives,]
+```
+```{r, heatmap-legends-labels, warning=FALSE}
+# Column labels
+col_labels <- c(expression("Average Speed in Light"^1), "Average Acceleration in Light", "Average Jerk in Light", expression("Habituation in Light"^3),
+                "Startle Acceleration", "Startle Relative to Avg. Speed in Light", "Startle Fold-Change",
+                expression("Average Speed in Dark"^1), "Average Acceleration in Dark", "Average Jerk in Dark", expression("Habituation in Dark"^3),
+                "Average Speed in Both Phases", expression("AUC in Dark / AUC in Light Ratio"^2)) # Superscripts notate references in poster
+# Legends
+
+# Custom heat legend.
+f2 = circlize::colorRamp2(seq(min(bmd), max(bmd), length = 8), rev(viridis(8)), space = "sRGB")
+heat_lgd = Legend(col_fun = f2,
+                  title = paste0("BMC log(","\U03BC","M)"),
+                  title_position = "lefttop",
+                  legend_width = unit(4,"cm"),
+                  direction = "horizontal")
+# Column annotation by phase legend.
+ann_lgd = Legend(labels = c("Light","Transition","Dark","Light+Dark"),
+                 title = "Phase",
+                 title_position = "leftcenter",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 legend_gp = grid::gpar(fill = c("white","grey","black","red")),
+                 border = TRUE,
+                 nrow = 1,
+                 column_gap = unit(5, 'mm'))
+# Legend for cell signal arrows.
+dir_lgd = Legend(labels = c(paste("\U2191","Gain"),
+                            paste("\U2193","Loss"),
+                            paste("\U21C5","GainLoss"),
+                            paste("\U21F5","LossGain")),
+                 title = "Signal Direction",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 title_position = "leftcenter",
+                 nrow = 1,
+                 column_gap = unit(0, 'mm')) # Will produce warnings, don't worry.
+lgd_list <- packLegend(ann_lgd, dir_lgd)
+
+# Create column annotation indicating the phase of the LMR that is described.
+column_ha <- ComplexHeatmap::HeatmapAnnotation(Phase = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                                        levels=c("Light","Transition","Dark","Light+Dark")),
+                                               border = TRUE,
+                                               simple_anno_size = unit(0.25, 'cm'),
+                                               col = list(Phase=c("Light"="white",
+                                                                  "Transition"="grey",
+                                                                  "Dark"="black",
+                                                                  "Light+Dark"="red")),
+                                               annotation_legend_param = list(nrow = 1),
+                                               show_annotation_name = FALSE,
+                                               show_legend = FALSE)
+
+# Create function to add arrows indicating signal direction in cells.
+cell_fun <- function(j, i, x, y, width, height, fill) {
+  if (layer.mat1[i,j] == 0) {
+    grid.text("\U21C5", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 1) {
+    grid.text("\U21F5", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 2) {
+    grid.text("\U2191", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 3) {
+    grid.text("\U2193", x, y, gp=gpar(fontsize=6))
+  }
+}
+```
+```{r, heatmap, warning=FALSE}
+# Create main heat map.
+htlist <- ComplexHeatmap::Heatmap(bmd[row.names(bmd) %in% actives,],
+
+                        # Specify some parameters for heat legend.
+                        name = paste0("BMC log(","\U03BC","M)"),
+                        col = f2,
+                        border_gp = grid::gpar(col="black",lwd=1),
+                        rect_gp=grid::gpar(col="grey"),
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(legend_height = unit(3.5,"cm"),
+                                                    direction = "vertical",
+                                                    title_gp = grid::gpar(fontsize=10),
+                                                    labels_gp = grid::gpar(fontsize=10)),
+
+                        # Heatmap width and height
+                        # width = unit(16,"in"),
+                        # height = unit(18,"in"),
+
+                        # Column label parameters
+                        column_labels = col_labels, column_names_rot = 45,
+
+
+                        # Split columns by phase.
+                        column_split = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                              levels=c("Light","Transition","Dark","Light+Dark")),
+
+                        # Specify some column parameters.
+                        column_title = NULL,
+                        top_annotation = column_ha,
+
+                        # Add signal direction arrows.
+                        cell_fun = cell_fun,
+
+                        # Specify some parameters row dendrogram aesthetics and row labels.
+                        row_title_side = "right",
+                        row_title_rot = 0,
+                        row_split = 5,
+                        row_dend_side = "right",
+                        row_names_side = "left",
+
+                        # Clustering parameters.
+                        cluster_columns = FALSE,
+                        cluster_rows = TRUE,
+                        clustering_distance_rows = "pearson",
+
+                        # Font sizes
+                        row_names_gp = grid::gpar(fontsize=8),
+                        column_names_gp = grid::gpar(fontsize=10),
+                        row_title_gp = grid::gpar(fontsize=10),
+                        column_title_gp = grid::gpar(fontsize=10)
+                        )
+draw(htlist, merge_legend = FALSE, annotation_legend_list = lgd_list,
+     annotation_legend_side = "top", align_annotation_legend = "heatmap_center")
+```
+
+## Areas Where New Activity is Seen
+
+```{r, layerMat-cellFun}
+isolate <- actives[order(actives)]
+isolate <- c(isolate[c(1,2,6,8,21)], isolate[c(10,12,13,20,22)])
+
+layer.mat2 <- layer.mat[isolate,]
+
+cell_fun1 <- function(j, i, x, y, width, height, fill) {
+  if (layer.mat2[i,j] == 0) {
+    grid.text("\U21C5", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 1) {
+    grid.text("\U21F5", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 2) {
+    grid.text("\U2191", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 3) {
+    grid.text("\U2193", x, y, gp=gpar(fontsize=12))
+  }
+}
+```
+```{r, new-activity, warning=FALSE}
+htlist2 <- ComplexHeatmap::Heatmap(bmd[isolate,],
+
+                        # Specify some parameters for heat legend.
+                        name = paste0("BMC log(","\U03BC","M)"),
+                        col = f2,
+                        border_gp = grid::gpar(col="black",lwd=1),
+                        rect_gp=grid::gpar(col="grey"),
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(legend_height = unit(3.5,"cm"),
+                                                    direction = "vertical",
+                                                    title_gp = grid::gpar(fontsize=10),
+                                                    labels_gp = grid::gpar(fontsize=10)),
+
+                        # Heatmap width and height
+                        # width = unit(16,"in"),
+                        # height = unit(18,"in"),
+
+                        # Column label parameters
+                        column_labels = col_labels, column_names_rot = 45,
+
+
+                        # Split columns by phase and row by activity type
+                        column_split = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                              levels=c("Light","Transition","Dark","Light+Dark")),
+                        # row_split = factor(c(rep("1",5), rep("2",5))),
+
+                        # Specify some column parameters.
+                        column_title = NULL,
+                        top_annotation = column_ha,
+
+                        # Add signal direction arrows.
+                        cell_fun = cell_fun1,
+
+                        # Specify some parameters row dendrogram aesthetics and row labels.
+                        row_title = NULL,
+                        row_title_rot = 0,
+                        #row_split = 3,
+                        row_names_side = "left",
+
+                        # Clustering parameters.
+                        cluster_columns = FALSE,
+                        cluster_rows = FALSE,
+
+                        # Font sizes
+                        row_names_gp = grid::gpar(fontsize=8),
+                        column_names_gp = grid::gpar(fontsize=10),
+                        row_title_gp = grid::gpar(fontsize=10),
+                        column_title_gp = grid::gpar(fontsize=10)
+                        )
+
+ht <- draw(htlist2, merge_legend = FALSE, annotation_legend_list = lgd_list,
+           annotation_legend_side = "top", align_annotation_legend = "heatmap_center")
+ro <- row_order(ht)
+co <- column_order(ht)
+
+# Highlight startle endpoints and average acceleration in Dark endpoint
+decorate_heatmap_body(paste0("BMC log(","\U03BC","M)"), row_slice = 1, column_slice = 1, {
+  grid.rect(unit(1.025,'npc'), unit(0.7,'npc'),
+            width = (length(co[[1]]) + length(co[[2]]))/length(co[[1]]) * unit(0.415,'npc') + unit(1,'mm'),
+            height = (length(ro[[1]]) + length(ro[[2]]))/length(ro[[1]]) * unit(0.344,'npc') + unit(1,'mm'),
+            gp = gpar(lwd=2, lty=1, fill=NA, col="red"), just=c('left','top')
+  )
+}) 
+decorate_heatmap_body(paste0("BMC log(","\U03BC","M)"), row_slice = 1, column_slice = 1, {
+  grid.rect(unit(2.05,'npc'), unit(1,'npc'),
+            width = (length(co[[1]]) + length(co[[2]]))/length(co[[1]]) * unit(0.13,'npc') + unit(1,'mm'),
+            height = (length(ro[[1]]) + length(ro[[2]]))/length(ro[[1]]) * unit(0.245,'npc') + unit(1,'mm'),
+            gp = gpar(lwd=2, lty=1, fill=NA, col="red"), just=c('left','top')
+  )
+})
+```
+
+## Potential Reference Chemicals
+
+```{r, refer-chem}
+aenms <- refer_chem[, unique(aenm)]
+AUC <- grep("AUC", aenms)
+notAUC <- aenms[-AUC]
+
+# Format data and print as a good table
+refer_chem_formatted <- refer_chem[order(aenm), .(aenm,direction,cpid,conc,rval)][aenm%in%notAUC]
+refer_chem_formatted[, rval:=round(rval, digits=2)]
+setnames(refer_chem_formatted, names(refer_chem_formatted),
+         c("Assay Endpoint Name","Signal Direction","Chemical Name",paste0("Concentration ","(\U03BC","M)"),"SEs from Control Mean"))
+datatable(refer_chem_formatted)
+```
+
+## Chlorpyrifos Behavioral Profile and Active Curve-Fits
+
+```{r, CPF-SA-timeSeries}
+chemical <- "Chlorpyrifos (ethyl)"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(data[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(data), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- data[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+SAplot_CPF <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=5) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 18))
+```
+```{r, CPF-active-curves}
+row1_CPF <- rows_n[[chemical]][["strtlAavg"]]
+row2_CPF <- rows_n[[chemical]][["avgA_D"]]
+
+fit1_CPF <- concRespCoreZR(row1_CPF, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit2_CPF <- concRespCoreZR(row2_CPF, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+
+# fit1_CPF$theme$text$size = 4
+# fit2_CPF$theme$text$size = 4
+# 
+# fit1_CPF$heme$line$size = 0.15
+```
+```{r, layout-grobs}
+# grobs <- list(SAplot_CPF, fit1_CPF, fit2_CPF)
+# layout <- matrix(c(1,1,1,1,2,3), nrow=3, ncol=2, byrow=TRUE)
+# 
+# gridExtra::grid.arrange(grobs = grobs, layout_matrix = layout)
+```
+```{r, grid-plot, fig.dim=c(17,17)}
+p1 <- cowplot::plot_grid(fit1_CPF, fit2_CPF, nrow=1)
+cowplot::plot_grid(SAplot_CPF, p1, nrow=2)
+```
+
+```{r, large-ctrl-sample-SAplot}
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(data), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- data[wllt=="v" & egid=="E19", -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for Large Vehicle Control Sample")
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+plot <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=3) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 14))
+
+plot
+```
+
+```{r, calculate-endpoint-data-for-smpl, message = FALSE}
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_mc0.rda")
+
+sample_endpoints <- lapply(mc0, function(table) {
+  table.egid <- gabi::data_egids(table)
+  table.egid[egid=="E19" & wllt=="v"]
+})
+
+sample_endpoints[c("AUC_L","AUC_D","AUC_T")] = NULL
+for (i in 1:13) {
+  sample_endpoints[[i]][, endp := names(sample_endpoints)[i]]
+}
+
+to.plot <- do.call('rbind', sample_endpoints)
+
+ggplot(to.plot) +
+  geom_histogram(aes(x=rval)) +
+  facet_wrap(vars(endp), scales = "free_x")
+```
+

@@ -1,0 +1,62 @@
+"","cpid","mean_LOEL_diff","sd_diff_mag"
+"1","Diazepam",0.421,0
+"2","Haloperidol",0.483,0.194
+"3","Valproate",-0.254,0.38
+"4","Bisphenol A (BPA)",-0.888,0.56
+"5","Fluoxetine",-0.971,0.567
+"6","Heptachlor",0.421,0.707
+"7","Chlorpyrifos (ethyl)",-0.224,1.11
+"8","Tebuconazole",-0.602,1.41
+"9","Acetaminophen",1.55,2.53
+"10","5,5-Diphenylhydantoin",NA,NA
+"11","5-Fluorouracil",-0.548,NA
+"12","6-Aminonicotinamide",NA,NA
+"13","6-Propyl-2-thiouracil",NA,NA
+"14","Acrylamide",NA,NA
+"15","Aldicarb",NA,NA
+"16","Amoxicillin",NA,NA
+"17","Amphetamine",NA,NA
+"18","Arsenic",NA,NA
+"19","Bis(tributyltin) oxide",NA,NA
+"20","Cadmium chloride",NA,NA
+"21","Caffeine",NA,NA
+"22","Captopril",NA,NA
+"23","Carbamazepine",NA,NA
+"24","Chloramben",NA,NA
+"25","Chlorpyrifos (ethyl) oxon",NA,NA
+"26","Cocaine base",NA,NA
+"27","Colchicine",NA,NA
+"28","Cotinine",NA,NA
+"29","Cyclophosphamide",NA,NA
+"30","Cytosine arabinoside",NA,NA
+"31","Di(2-ethylhexyl)phthalate (DEHP)",NA,NA
+"32","Deltamethrin",1.88,NA
+"33","Diethylstilbesterol",NA,NA
+"34","Dexamethazone",NA,NA
+"35","Dieldrin",NA,NA
+"36","Diethylene glycol",NA,NA
+"37","D-sorbitol",0.676,NA
+"38","Fluconazole",NA,NA
+"39","Glyphosate",NA,NA
+"40","Heptachlor epoxide",NA,NA
+"41","Hexachlorophene",NA,NA
+"42","Hydoxyurea",NA,NA
+"43","Isoniazid",NA,NA
+"44","Lead acetate",NA,NA
+"45","Loperamide",NA,NA
+"46","Maneb",NA,NA
+"47","Manganese",NA,NA
+"48","Methotrexate",NA,NA
+"49","Naloxon",NA,NA
+"50","Nicotine",NA,NA
+"51","Paraquat",0.398,NA
+"52","Polybrominated diphenyl ether (PBDE)-47",-1.6,NA
+"53","Permethrin",NA,NA
+"54","Phenobarbital",2.18,NA
+"55","Phenol",NA,NA
+"56","Saccharin",NA,NA
+"57","Sodium benzoate",NA,NA
+"58","Sodium fluoride",NA,NA
+"59","Terbutaline",NA,NA
+"60","Thalidomide",NA,NA
+"61","Triethyltin",NA,NA

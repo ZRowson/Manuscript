@@ -1,0 +1,93 @@
+---
+title: "Week of 08-01-2022 Part 2"
+author: "Zachary Rowson"
+date: "8/1/2022"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+```
+
+## Introduction
+
+In this document I will look at the mean LOEL for chemicals from DNT60 study across the evaluated endpoints and compare to LOELs observed in other studies.
+
+## Find Mean LOELs
+
+LOELs will be calculated for each chemical-endpoint pair using ANOVA test for concentration groups followed by Dunnett's post-hoc test to determine concentration groups different than control. From there LOELs for a chemical will be averaged and this average LOEL will be compared to LOELs of other studies.
+
+```{r, apply-Dunnetts}
+load("../../../DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_rows_n.rda")
+
+LOELs <- lapply(rows_n, function(chemical) {
+  LOELs <- unlist( lapply(chemical[c(2:8,10:13,15,16)], function(row) {
+        resp <- c(row[["bresp"]], row[["resp"]])
+        conc <- c( rep(0,length(row[["bresp"]])), row[["conc"]] )
+        
+        resp.df <- data.frame(resp=resp, conc=as.factor(conc))
+        pval <- anova( lm(resp ~ conc, data=resp.df) )$`Pr(>F)`[1]
+        
+        if(pval < (0.05/13)) {
+          DTest <- DescTools::DunnettTest(x = resp, g = conc)
+          sigConc <- names( which(DTest$`0`[,4] < 0.05) )
+          sigConc1 <- as.numeric(gsub("-0", "", sigConc))
+          if (length(sigConc1) == 0) {
+            LOEL <- NA
+          } else {
+           LOEL <- log10( min(sigConc1) ) 
+          }
+        } else {
+          LOEL <- NA
+        }
+        
+        LOEL
+      }) )
+  
+  LOELs
+})
+
+DNT60LOELs <- as.data.table(do.call('rbind', LOELs), keep.rownames = "cpid")
+
+DNT60_medLOELs <- DNT60LOELs[, .(cpid, med_LOEL = matrixStats::rowMedians(as.matrix(.SD),na.rm=TRUE)), .SDcols=names(DNT60LOELs)[-1]]
+```
+
+## Compare LOELs to Other Studies
+
+Use average LOEL across endpoints from DNT60 study for chemicals to compare to other studies. Is effect occurring at similar concentration for chemicals active in the DNT60 study?
+
+To determine this I'll look at the difference in orders of magnitude between mean LOEL measurements from Padilla study and LOELs other studies. Then I will look at the variance of these differences to see if studies are consistent in their agreement or disagreement with Padilla study.  
+
+```{r, load-data}
+load("../Data/Literature Review Concentrations and Activity.Rdata")
+load("../Data/Literature Review LOELs and Dev LOELs.Rdata")
+```
+```{r, compare-LOEL}
+chemicals <- DNT60_medLOELs[!is.na(med_LOEL), unique(cpid)]
+litReviewLOELs[, `:=` (neuro_LOEL = log10(neuro_LOEL), dev_LOEL = log10(dev_LOEL))]
+
+compareLOELs <-litReviewLOELs[DOI != "DNT60"][DNT60_medLOELs, on = .(cpid)]
+setnames(compareLOELs, "med_LOEL", "DNT60_med_LOEL")
+compareLOELs[, LOEL_diff := neuro_LOEL - DNT60_med_LOEL]
+
+compareLOEL_summary <- compareLOELs[, .(mean_LOEL_diff = mean(LOEL_diff,na.rm=T), sd_diff_mag = sd(LOEL_diff,na.rm=TRUE)), by = .(cpid)][order(sd_diff_mag)]
+
+DT::datatable(compareLOEL_summary,
+              caption="Summarize Differences in LOEL Magnitudes",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Six chemicals were found to have a small variation in the LOEL magnitude difference from Padilla study LOEL from study to study: Diazepam, Haloperidol, Valproate, BPA, Fluoxetine, and Heptachlor.
+
+Of these chemicals three were found to also have an exceptionally small mean difference: Diazepam, Haloperidol, and Valproate.
+
+Valproate had a large number of papers associated with it. The observance of small mean difference between other study LOELs and Padilla study as well as small variance in these differences implies that it is a reproducible positive. However, it is noticeable the observed LOEL for Valproate occurred at 40 uM in Padilla study, very close to the developmental toxicity concentration. It is possible that we are observing the onset of developmental toxicity rather than neurodevelopmental toxicity.
+
+Other chemicals, noticeably Chlorpyrifos (ethyl), were observed to have small mean difference but large variance. Since Chlorpyrifos was observed to be positive in 9 of 9 studies as well as Padilla study when evaluated for other endpoints, this is strong indication that it is a reproducible positive.
+
+Bisphenol A was observed to have effect in Padilla study at 40 uM, near devTox concentration. In other studies effect was observed below this concentration. It was observed to be reproducible as an active though LOEL differed from study to study. 

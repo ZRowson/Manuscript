@@ -1,0 +1,73 @@
+---
+title: "Week of 08-15-2022"
+author: "Zachary Rowson"
+date: "8/16/2022"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+```
+
+## Introduction
+
+In this document I will create table collecting all pertinent data for chemicals. This includes number of endpoints active, mean BMC of hits, range or variance of BMC estimates, average/mean flags per curve-fits with a hit, number of associated publications, number of papers reporting chemical perturbation, percent of associated papers with activity, median LOEL of gabi analysis, developmental LOEL, mean difference of LOELs from gabi analysis median LOEL, variance in these differences, difference between study LOELs and developmental LOEL, and the variance in these differences.
+
+## Putting Table Together
+
+Pull together the necessary data sources.
+
+```{r, data-load}
+load("~/Desktop/Stephanie Projects/gabi/Manuscript/tables/compareLOELs.Rdata")
+load("~/Desktop/Stephanie Projects/gabi/Manuscript/tables/DNT LOEL comparison.Rdata")
+load("~/Desktop/Stephanie Projects/gabi/Manuscript/tables/Literature Review Paper Numbers.Rdata")
+load("~/Desktop/Stephanie Projects/gabi/Manuscript/tables/mean differences dev LOEL.Rdata")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/results/Padilla_DNT60_tcpl_out.Rdata")
+load("~/Desktop/Stephanie Projects/gabi/Manuscript/tables/Median gabi Nuero LOELs.Rdata")
+```
+
+```{r, gather-LOELs, warning=FALSE, message=FALSE}
+litReviewConc <- as.data.table( readxl::read_xlsx("../tables/LitReview Conc.xlsx") )
+litReviewConc[, dev_LOEL := min(.SD[devtox==1,conc]), by=.(cpid)]
+litReviewConc[is.infinite(dev_LOEL), dev_LOEL := NA]
+
+dev_LOELs <- litReviewConc[, .(dev_LOEL = unique(dev_LOEL)), by = .(cpid)]
+compareDev <- litReviewConc[neurotox==1][, .(neuro_LOEL =  min(conc)), by = .(cpid,DOI)]
+compareDev <- compareDev[dev_LOELs, on = .(cpid)]
+
+compareDev[, mag_diff := log10(neuro_LOEL/dev_LOEL), by = .(cpid,DOI) ]
+mean_diff <- compareDev[, .(mean_mag_diff_dev_neuro = mean(mag_diff,na.rm=T), sd_mag_diff_dev_neuro = sd(mag_diff,na.rm=T)), by = .(cpid)][order(-mean_mag_diff_dev_neuro)]
+```
+```{r}
+tcpl_out.dt <- as.data.table(DNT60_tcpl_out)
+endp_active <- tcpl_out.dt[hitcall > 0.8, .N, by = .(name)]
+endp_active[, `:=` (cpid=name, name=NULL)]
+
+final_table <- endp_active[litReview, on = .(cpid)][mean_diff, on=.(cpid)]
+```
+```{r}
+medLOELs.dt <- data.table(cpid = names(medLOELs), medLOEL = unlist(medLOELs))
+final_table1 <- LOEL_sim_summary[, .(cpid=cpid, mean_diff_mag_neuro=mean_diff_mag, sd_diff_mag_nuero=sd_diff_mag)][final_table, on=.(cpid)]
+```
+```{r}
+final_table2 <- final_table1[medLOELs.dt, on=.(cpid)]
+final_table3 <- final_table2[dev_LOELs, on=.(cpid)]
+```
+```{r}
+data.table::setnames(final_table3, c("N","Active.in.gabi.analysis","Active.in.other.endpoints","Number.of.asociated.publications","Number.of.publications.with.activity"), c("number.of.active.gabi.endpoints","active.in.gabi.analysis","active.in.other.endpoints","number.of.associated.publications","number.of.publications.with.activity"))
+
+final_table4 <- final_table3[, .(cpid, active.in.gabi.analysis, active.in.Net.Activity.metrics, active.in.other.endpoints, number.of.active.gabi.endpoints, medLOEL, dev_LOEL, number.of.associated.publications, `%.of.papers.with.activity`, mean_diff_mag_neuro, sd_diff_mag_nuero, mean_mag_diff_dev_neuro, sd_mag_diff_dev_neuro)]
+```
+```{r}
+final_table4[, dev_LOEL := log10(dev_LOEL)]
+```
+
+I have gathered together recent information. Add to this table BMCs, and BMC ranges, and information on tcpl flags. I may want to omit tcpl flags as this weren't very well defined.
+
+```{r}
+
+```
+

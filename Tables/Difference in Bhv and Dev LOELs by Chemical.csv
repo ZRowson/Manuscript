@@ -1,0 +1,37 @@
+"","cpid","median_mag_diff","sd_mag_diff"
+"1","Cadmium chloride",2.45309527357309,0.731211594882401
+"2","Dieldrin",0.636500636031869,0.337375674660507
+"3","Carbamazepine",0.522878745280338,NA
+"4","Deltamethrin",0.397940008672038,NA
+"5","Nicotine",0.312459457444763,0.111892863844798
+"6","Heptachlor",-0.102059991327962,0.707106781186548
+"7","Bis(tributyltin) oxide",-0.266589350960075,1.07683788771259
+"8","Permethrin",-0.425968732272281,NA
+"9","Lead acetate",-0.458607314841775,1.47449193712649
+"10","Colchicine",-0.490052585641531,1.00984379730621
+"11","Valproate",-0.662926789694506,0.37970854693019
+"12","Haloperidol",-1.04013417084442,0.193809743448523
+"13","Bisphenol A (BPA)",-1.42596873227228,0.559900478985144
+"14","Diazepam",-1.60205999132796,0
+"15","Tebuconazole",-1.60205999132796,1.4142135623731
+"16","Chlorpyrifos (ethyl)",-1.62433638603911,1.10824428751083
+"17","Fluoxetine",-1.97059330569288,0.567124760964517
+"18","Polybrominated diphenyl ether (PBDE)-47",-2.11394335230684,NA
+"19","5-Fluorouracil",NA,NA
+"20","6-Propyl-2-thiouracil",NA,NA
+"21","Acetaminophen",NA,NA
+"22","Acrylamide",NA,NA
+"23","Aldicarb",NA,NA
+"24","Amoxicillin",NA,NA
+"25","Caffeine",NA,NA
+"26","Di(2-ethylhexyl)phthalate (DEHP)",NA,NA
+"27","Diethylstilbesterol",NA,NA
+"28","D-sorbitol",NA,NA
+"29","Hexachlorophene",NA,NA
+"30","Hydoxyurea",NA,NA
+"31","Isoniazid",NA,NA
+"32","Paraquat",NA,NA
+"33","Phenobarbital",NA,NA
+"34","Phenol",NA,NA
+"35","Saccharin",NA,NA
+"36","Thalidomide",NA,NA

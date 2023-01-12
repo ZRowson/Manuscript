@@ -1,0 +1,223 @@
+---
+title: "Week of 08-01-2022"
+author: "Zachary Rowson"
+date: "7/29/2022"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(readxl)
+library(DT)
+```
+
+## Introduction
+
+This week I will ID replicable positives and negatives and others which have more equivocal results. I will also evaluate if chemicals that Stephanie found inactive tended to be evaluated for behavioral perturbation at concentration lower than concentrations found active in other studies, particularly if this was due to the presence of developmental toxicity.
+
+## Reproducible Actives and Inactives
+
+### Actives
+
+```{r, data-load, message=FALSE, warning=FALSE}
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/results/Padilla_DNT60_tcpl_out.Rdata")
+tcplOut.dt <- as.data.table(DNT60_tcpl_out)
+
+# Load literature review table and save sheet of interest as data.table
+
+litReviewSummary <- as.data.table( readxl::read_xlsx("../tables/copy_Chemical Comparison Tables_Behavior Results and  Literature_FINAL-rev5_2_22-jko.xlsx",
+                               sheet = "gabiComparison") )
+```
+```{r, data-format, warning=FALSE}
+# Set column names and row names
+newNames <- c( "cpid", sapply(names(litReviewSummary), gsub, pattern=" ", replacement=".")[-1] )
+setnames(litReviewSummary, old = names(litReviewSummary), new = newNames)
+
+# ID chemicals active in net activity metrics
+active.1 <- tcplOut.dt[endp%in%c("avgS_L","avgS_D","avgS_T") & hitcall>0.8, unique(name)]
+
+# ID chemicals active in other endpoints
+active.2 <- tcplOut.dt[!endp%in%c("avgS_L","avgS_D","avgS_T","AUC_L","AUC_D","AUC_T") & hitcall>0.8, unique(name)]
+
+# Edit litReviewSummary columns
+litReviewSummary[is.na(Active.in.gabi.analysis), Active.in.gabi.analysis := 0]
+litReviewSummary[cpid %in% active.1, Active.in.Net.Activity.metrics := 1]
+litReviewSummary[Active.in.gabi.analysis==1 & is.na(Active.in.Net.Activity.metrics),
+                 Active.in.Net.Activity.metrics := 0]
+litReviewSummary[cpid %in% active.2, Active.in.other.endpoints := 1]
+litReviewSummary[Active.in.gabi.analysis==1 & is.na(Active.in.other.endpoints),
+                 Active.in.other.endpoints := 0]
+
+# str(litReviewSummary)
+litReviewSummary[, Active.in.gabi.analysis := as.logical(Active.in.gabi.analysis)]
+litReviewSummary[, Number.of.publications.with.activity := as.integer(Number.of.publications.with.activity)]
+litReviewSummary[, `%.of.papers.with.activity` := as.numeric(`%.of.papers.with.activity`)]
+
+
+
+litReviewSummary[Number.of.associated.publications==0,
+          `:=` (Number.of.publications.with.activity=NA, `%.of.papers.with.activity`=NA)]
+
+DT::datatable(litReviewSummary, caption="Formatted Literature Review table.",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+```{r, classify-chems}
+litReviewSummary[`%.of.papers.with.activity`>50 & Active.in.gabi.analysis==TRUE, reproducible := TRUE]
+litReviewSummary[`%.of.papers.with.activity`<=50 & Active.in.gabi.analysis==TRUE, reproducible := FALSE]
+litReviewSummary[`%.of.papers.with.activity`<=50 & Active.in.gabi.analysis==FALSE, reproducible := TRUE]
+litReviewSummary[`%.of.papers.with.activity`>50 & Active.in.gabi.analysis==FALSE, reproducible := FALSE]
+```
+
+Define a reproducible chemical as having a majority of it's associated papers (more than 50%) agreeing with our studies findings (another thing to think about is that for chemicals with less than 50%, from the perspective of a contradicting study, it's reproducible. So maybe reproducible isn't the word we want). What percent of chemicals found active in his study (with associated papers) were observed to be reproducible?
+
+```{r, reproducibility-active}
+n_1 <- litReviewSummary[Active.in.gabi.analysis==TRUE & Number.of.associated.publications>0, .N]
+litReviewSummary[Active.in.gabi.analysis==TRUE & reproducible==TRUE & Number.of.associated.publications>0, .N / n_1]
+```
+
+What number of inactive chemicals with associated papers were observed to be reproducible?
+
+```{r, reproducibility-active-1}
+n_2 <- litReviewSummary[Active.in.gabi.analysis==FALSE & Number.of.associated.publications>0, .N]
+litReviewSummary[Active.in.gabi.analysis==FALSE & reproducible==TRUE & Number.of.associated.publications>0, .N / n_2]
+```
+
+We see that active chemicals are found to be more reproducible than negatives. This could be due to a few things we have talked about before: the preference of researchers to publish "positive" results and the conservatism of Padilla lab experimental procedure relative to other labs. 
+
+Display active chemicals in order of percent active and then ordered again by number of associated papers.
+
+```{r, ordered-actives}
+DT::datatable(litReviewSummary[Active.in.gabi.analysis==TRUE &  Number.of.associated.publications>0][order(-`%.of.papers.with.activity`, -Number.of.associated.publications), .(cpid,`%.of.papers.with.activity`,Number.of.associated.publications)],
+caption="Reproducibilty of gabi Analysis Actives",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Reproducible actives are Chlorpyrifos, Bis(tributytin) Oxide, BPA, Dieldrin, Heptachlor, Acrylamide, Fluoxetine, D-Sorbitol, Paraquat, PBDE-47, and Paraquat. Equivocal actives are Tebuconazole, 5-Fluorouracil, Diazepam, Phenobarbital, and Dietylstilbesterol. Again, for a chemical like Diethylstilbesterol it may be useful to define this as reproducible since the majority of studies we are examining, ours included, found it to be inactive. 
+
+We see two chemicals stand out as not only reproducible, but also having a large number of associated papers with activity (I'll call this confidence): Chlorpyrifos and  Bisphenol A (BPA). A few other chemicals appeared to be reproducible with a fair amount of confidence Bis(tributyltin) Oxide, Dieldrin, Heptachlor, Acrylamide, and Fluoxetine. I think integrating this information with what we observed in our study (which chemicals appeared to most clearly alter zebrafish behavior) will be the most useful way to identify potential positives and negatives for this assay.
+
+Order papers by the product of number of associated papers and % of papers active.
+
+```{r, order-by-product}
+litReviewSummary[, product := `%.of.papers.with.activity`*Number.of.publications.with.activity]
+litReviewSummary[Active.in.gabi.analysis==TRUE & Number.of.associated.publications>0][order(-`product`), cpid]
+```
+
+Best performers by this metric weren't all our clearest actives in this study. Maybe we should look at the concentrations that were considered active in associated papers for these clear active chemicals. It's possible that other studies didn't test at high enough concentration.
+
+### Inactives
+
+```{r, ordered-inactives}
+DT::datatable(litReviewSummary[Active.in.gabi.analysis==FALSE &  Number.of.associated.publications>0][order(`%.of.papers.with.activity`, -Number.of.associated.publications), .(cpid,`%.of.papers.with.activity`,Number.of.associated.publications)],
+caption="Reproducibilty of gabi Analysis Inactives",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Nine chemicals appear to be reproducible negatives Aldicarb, Amoxicillin, Hexachlorophene, Hydroxyurea, 6-propyl-2-thiouracil, Carbamazepine, Permethrin, Dexamethazone, and Saccharin. Equivocal negatives list is extensive, but we will see later that 9 of these equivocal negatives may be reproducible negatives due to the inclusion of malformed subjects in other studies.
+
+## Evaluating Concentrations Used in Other Studies
+
+Were there chemicals found _inactive_ in our analysis found widely _active_ in other studies.
+
+```{r, effect-of-conc}
+litReviewSummary[Active.in.gabi.analysis==F & Number.of.associated.publications>=3, .(cpid, Number.of.associated.publications, Number.of.publications.with.activity, `%.of.papers.with.activity`)][order(-`%.of.papers.with.activity`)]
+```
+
+Look at Nicotine, Valproate, Lead acetate, Colchicine, Haloperidol, and Acetaminophen. Which concentrations were found active in other papers?
+
+```{r, tested-concs}
+litReviewConc <- as.data.table( readxl::read_xlsx("../tables/LitReview Conc.xlsx") )
+missedActives <- c("Nicotine", "Valproate", "Lead acetate", "Colchicine", "Haloperidol", "Acetaminophen")
+DT::datatable(litReviewConc[cpid%in%missedActives],
+              caption="Missed Actives and Tested Concentrations",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Acetaminophen is active at concentrations lower than those tested by Padilla lab in only 2 of 5 papers. One paper observed activity at _very_ high concentration and the others did not observe activity at low or high concentration. Developmental toxicity wasn't observed at the concentrations tested in this study which I don't believe was limited by a range finding study.
+
+DevTox for Colchicine was observed at 40 uM in Padilla lab. Colchicine was found active in one paper starting at 67 uM and another starting at lower concentration 2.5 uM. Another study did not see effect. It does not seem clear that neurotoxic effect was missed for this chemical. Possible that devTox is explaining some of the observed activity? It is notable that for the study testing 2.5 uM, direction of activity was in up direction, which would not typically align with the effect of devTox on zebrafish locomotion.
+
+Haloperidol devTox was found at 4 uM in Padilla study. For two of three studies neurotoxicity was observed at concentration of ~0.1 uM. Padilla lab evaluated similar concentration and did not see effect.
+
+Lead acetate in DNT60 study was found to induce devtox in 1.2 uM. Effects were seen in 2 publications at lower concentration than the devtox concentration, ~0.1 uM. In 2 publications concentrations were above or near the devtox concentration. It is notable that 3 of the 5 studies only tested at concentrations that were very close or above the devtox concentration of the Padilla study where as other two tested below. Could be those two performed range finding studies prior to LMR study.
+
+Nicotine was found active in concentrations higher than devtox in all other studies.
+
+Valproate was active in concentrations that were below devtox but most studies did not test at concentration as low as the Padilla study. Thus it is possible that they would have observed effect if they had. 
+
+## Activity Above Developmental Toxicity
+
+In general is activity seen in studies for concentrations above the developmental toxicity observed in the Padilla study?
+
+To answer this I will look at chemicals and see what percent of neurotoxic concentrations in other studies are above the developmental LOEL observed in the Padilla study.
+
+```{r, neurotox-above-devtox, warning=FALSE}
+litReviewConc[, dev_LOEL := min(.SD[devtox==1,conc]), by=.(cpid)]
+litReviewConc[is.infinite(dev_LOEL), dev_LOEL := NA]
+
+aboveDevtox.count <- litReviewConc[neurotox==1 & DOI!="DNT60", conc > dev_LOEL]
+table(aboveDevtox.count)
+
+litReviewConc1 <- copy(litReviewConc)
+litReviewConc1[neurotox==1 & DOI!="DNT60", aboveDevLOEL := conc > dev_LOEL]
+```
+
+Look for chemicals where some where concentration with neuroactivity is above Padilla devtox concentration and count the number of concentrations where this occurs. This metric will be dependent on the number of publications associated with a chemical that tested above devTox.
+
+```{r, conc-above-neurotox}
+litReviewConc[neurotox==1 & conc > dev_LOEL, .N, by=.(cpid)][order(-N)]
+```
+
+Nicotine and heavy metals Lead and Cadmium head the list. Nicotine, Valproate, Lead acetate, and Colchicine are also on this list (previously found to be widely active in other studies). This may indicate for those chemicals developmental toxicity overlapped with observed neurotoxicity.
+
+There are a handful of chemicals where activity was seen in studies at concentrations above the developmental LOEL observed in Padilla study. This does not mean that the neurotoxicity LOEL in these studies is above the developmental LOEL. Look for chemicals where this is true.
+
+```{r, gather-LOELs}
+dev_LOELs <- litReviewConc1[, .(dev_LOEL = unique(dev_LOEL)), by = .(cpid)]
+litReviewLOELs <- litReviewConc[neurotox==1][, .(neuro_LOEL =  min(conc)), by = .(cpid,DOI)]
+allDOIs <- litReviewConc[DOI!="DNT60",.(DOI = unique(DOI)), by = .(cpid)]
+
+litReviewLOELs <- rbind(allDOIs[!litReviewLOELs, on = .(cpid,DOI)][, .(cpid,DOI,neuro_LOEL=NA)], litReviewLOELs)
+litReviewLOELs <- litReviewLOELs[dev_LOELs, on = .(cpid)]
+```
+
+Look at magnitude difference between other study neurotoxicity/behavioral LOEL and Padilla developmental LOEL.
+
+```{r, calculate-LOELs}
+litReviewLOELs[, mag_diff := log10(neuro_LOEL/dev_LOEL), by = .(cpid,DOI) ]
+```
+
+Look for chemicals whose LOEL in studies is all above the LOAEL or very near. Look to see how many chemicals follow this trend. Definitely will be useful for discussing the sensitivity of the assay relative to the definitions provided by Mundy et al. 2015 and the results relative to other studies.
+
+```{r, compare-medians}
+median_LOEL_diff <- litReviewLOELs[, .(median_mag_diff = mean(mag_diff,na.rm=T), sd_mag_diff = sd(mag_diff,na.rm=T)), by = .(cpid)][order(-median_mag_diff)]
+DT::datatable(median_LOEL_diff[!is.na(median_mag_diff), .(cpid = cpid, median_mag_diff = signif(median_mag_diff,digits=3), sd_mag_diff = signif(sd_mag_diff,digits=3))], caption="Median Difference in Magnitude from LOEL to LOAEL",
+              colnames = c("Chemical Name", "Median Magnitude Difference", "SD in Magnitude Difference"),
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Many of the studies associated with the chemicals at the top of this list tested only at concentration above or near the LOAEL. This does not help clarify reproducibility of results below LOAEL, but can help explain discrepancy between declaration of activity in the LMR assay from our study to others.
+
+There are 11 chemicals whose study LOELs were on average at most 1 order of magnitude below the LOAEL. For these 11, did we detect neuroactivity in our study?
+
+```{r, activity-LOEL->-LOAEL}
+LOEL_over <- median_LOEL_diff[median_mag_diff > -1, cpid]
+tcplOut.dt[name%in%LOEL_over & hitcall>0.8, unique(name)]
+```
+
+Interestingly, of these 11 chemicals only _2_ were active in our gabi analysis of the study.
+
+It is also notable that a handful of very toxic chemicals appear at the top of these 11 chemicals as well: Cadmium chloride, Lead acetate, and Bis(tributyltin) oxide. This may be an indication that the cause for the proximity of study neurotoxity LOELs to developmental LOELs in our study is due to the developmental toxicity of chemicals  by our definition of developmental toxicity.

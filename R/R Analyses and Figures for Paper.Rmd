@@ -1,0 +1,1620 @@
+---
+title: "R Analyses and Figures for Manuscript"
+author: "Zachary Rowson"
+date: "6/7/2022"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE)
+library(gabi)
+library(data.table)
+library(DT)
+library(sjPlot)
+library(ComplexHeatmap)
+library(gridExtra)
+library(viridis)
+library(grid)
+library(ggupset)
+library(matrixStats)
+```
+
+## Introduction
+
+This document will contain all analyses and figures produced in R to be included in the manuscript. Note that these are not all the figures to be included, some were produced in PowerPoint and have been saved as image files.
+
+```{r, load-necessary-data}
+# Raw data, endpoint data, and row objects for tcplfit2
+load("../Data/Padilla_DNT60_lmr0_w_egid.Rdata")
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_mc0.rda")
+load("../Data/Padilla_DNT60_mc0_n.rda")
+load("../Data/Padilla_DNT60_rows_n.rda")
+
+# Results of curve fitting
+load("../Data/Padilla_DNT60_tcplfits.rda")
+load("../Data/Padilla_DNT60_tcpl_out.Rdata")
+tcpl_out.dt <- as.data.table(DNT60_tcpl_out)
+
+# Summarizing results of curve-fitting
+load("../Data/Padilla_DNT60_Strong Effectors by Endpoint.Rdata")
+load("../Data/Padilla_DNT60_BMC ranges.Rdata") # This data needs to be recompiled
+
+# Results of literature review
+load("../Data/Padilla_DNT60_Behavioral LOELs.Rdata")
+load("../Data/Literature Review Summary.Rdata")
+load("../Data/Literature Review Concentrations and Activity.Rdata")
+load("../Data/Literature Review LOELs and Dev LOELs.Rdata") 
+```
+
+### Example Locomotor Response Data
+
+```{r, edit-CPF-name}
+lmr0.egid[cpid=="Chlorpyrifos (ethyl)", cpid := "Chlorpyrifos"]
+```
+
+```{r, Fluoxetine-SA-timeSeries, include=FALSE}
+chemical <- "Chlorpyrifos"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(lmr0.egid[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- lmr0.egid[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+FlxSAplot <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=3) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 14))
+
+FlxSAplot
+```
+
+### Example tcpl Curve-Fit
+
+```{r, example-curve-fit, warning=FALSE, include=FALSE}
+tcplfit <- tcplfits_n[["Fluoxetine"]][["avgS_L"]]
+tcplfit[["plot"]]
+summary <- subset( tcplfit[["summary"]], select = -c(conc,resp) )
+summary
+```
+
+## Results
+
+### Appearance of Endpoint Data
+
+#### Figure 2: Typical Raw Movement Data and Effect of Transformation procedure and Fluoxetine Exposure on Distributions of Endpoint Data
+
+```{r, large-ctrl-sample-SAplot}
+# Time Series for Fluoxetine vehicle control
+
+# Units
+unit.t = "2 min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+no.A = 10
+
+
+# Identify movement columns of interest and extract
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+to.fit <- lmr0.egid[wllt=="v" & egid=="E6", -A.cols, with=FALSE]
+
+# Melt data and designate Light and Dark time periods
+to.fit_melt <- melt(to.fit[,-"egid"], id.vars = names(to.fit)[1:9], variable.name = "t", value.name = "speed")
+to.fit_melt[, t := as.factor( gsub("vt","",t) )]
+to.fit_melt[t%in%11:30, phase := "Light"]
+to.fit_melt[t%in%31:50, phase := "Dark"]
+
+# Create title, x- and y-axis titles, legend labels, and legend title
+title.t <- paste0("Time (",unit.t,")")
+label.y <- "Speed"
+title.mean <- paste0(label.y, " (",unit.mov,"/",unit.t,")")
+
+title.legend <- "Experimental Phase"
+
+## Create x-axis breaks and labels
+m <- 50
+x.breaks <- c(11, 20, 30, 40, 50)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+# Printing of graphic isn't working very well so insert new breaks to make space for edges
+x.breaks <- c(5, x.breaks, 55)
+x.labels <- c("a", x.labels, "b")
+
+## plot
+FlxTSeriesPlot <- ggplot(to.fit_melt) +
+          geom_boxplot(aes(x=t,y=speed,fill=phase)) +
+          scale_x_discrete(breaks = x.breaks, labels = x.labels) +
+          scale_fill_manual(values=c("darkgrey","white")) +
+          labs(x = title.t, y = title.mean, fill = "Experimental Phase") +
+          theme_bw() +
+          theme(text = element_text(size = 26))
+```
+```{r, calculate-speed-data-for-smpl, message = FALSE}
+# Raw endpoint data for Fluoxetine vehicle control
+
+sample_endpoints <- lapply(mc0, function(table) {
+  table.egid <- gabi::data_egids(table)
+  table.egid[egid=="E6"]
+})
+
+sample_endpoints[c("AUC_L","AUC_D","AUC_T")] = NULL
+for (i in 1:13) {
+  sample_endpoints[[i]][, endp := names(sample_endpoints)[i]]
+}
+
+endp.data <- do.call('rbind', sample_endpoints)
+max.conc <- max( endp.data[cpid=="Fluoxetine", conc] )
+
+raw_stats <- endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(conc)]
+raw_stats_l <- data.table::melt(raw_stats, id.vars = "conc", variable.name = "stat")
+
+FlxAvgS_LPlot <- ggplot(endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"]) +
+  geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+  theme_bw() +
+  theme(text = element_text(size = 26)) +
+  scale_color_manual(values = colors[c(1,5)]) +
+  scale_fill_manual(values = colors[c(1,5)]) +
+  labs(color = paste0("Concentration (", unit.conc, ")"),
+       fill = paste0("Concentration (", unit.conc, ")"),
+       linetype = "",
+       x = "Raw Endpoint Value",
+       y = "Density")
+
+FlxAvgS_LPlot <- FlxAvgS_LPlot + 
+                  geom_vline(data = raw_stats_l, aes(xintercept=value, linetype=stat), color = colors[c(1,5,1,5)], size=1) +
+                  scale_linetype_discrete(labels = c("Mean","Median")) +
+                  scale_y_continuous(labels = c("0.0","0.1","0.2","0.3","")) +
+                  labs(color = paste0("Concentration (", unit.conc, ")"),
+                       fill = paste0("Concentration (", unit.conc, ")"),
+                       linetype = "",
+                       x = "Raw Endpoint Value",
+                       y = NULL)
+
+legend <- cowplot::get_legend(FlxAvgS_LPlot)
+
+FlxAvgS_LPlot <- FlxAvgS_LPlot + theme(legend.position="none")
+```
+```{r, calculate-speed-data-for-smpl_N, message = FALSE}
+sample_endpoints_n <- lapply(mc0_n, function(list) {
+  table <- list[[1]]
+  table.egid <- gabi::data_egids(table)
+  table.egid[egid=="E6"]
+})
+
+sample_endpoints_n[c("AUC_L","AUC_D","AUC_T")] = NULL
+for (i in 1:13) {
+  sample_endpoints_n[[i]][, endp := names(sample_endpoints_n)[i]]
+}
+
+endp.data_n <- do.call('rbind', sample_endpoints_n)
+
+trans_stats <- endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(conc)]
+trans_stats_l <- data.table::melt(trans_stats, id.vars = "conc", variable.name = "stat")
+
+FlxAvgS_LPlot_n <-ggplot(endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"]) +
+  geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+  theme_bw() +
+  theme(text = element_text(size = 26)) +
+  scale_color_manual(values = colors[c(1,5)]) +
+  scale_fill_manual(values = colors[c(1,5)]) +
+  labs(color = paste0("Concentration (", unit.conc, ")"),
+       fill = paste0("Concentration (", unit.conc, ")"),
+       linetype = "",
+       x = "Transformed Endpoint Value",
+       y = NULL)
+
+FlxAvgS_LPlot_n <- FlxAvgS_LPlot_n + 
+                    geom_vline(data = trans_stats_l, aes(xintercept=value, linetype=stat), color = colors[c(1,5,1,5)], size=1) +
+                    scale_linetype_discrete(labels = c("Mean","Median")) +
+                    labs(color = paste0("Concentration (", unit.conc, ")"),
+                         fill = paste0("Concentration (", unit.conc, ")"),
+                         linetype = "",
+                         x = "Transformed Endpoint Value",
+                         y = NULL)
+
+FlxAvgS_LPlot_n <- FlxAvgS_LPlot_n + theme(legend.position="none")
+```
+
+```{r, plot-Flx-data, fig.dim=c(19,13), message = FALSE}
+FlxEndpPlots <- cowplot::plot_grid(FlxAvgS_LPlot, FlxAvgS_LPlot_n,
+                   labels = list("B","C"), label_size = 24)
+FlxEndpPlots1 <- cowplot::plot_grid(FlxEndpPlots, legend, rel_widths = c(3, 1))
+FlxPlots <- cowplot:::plot_grid(FlxTSeriesPlot, FlxEndpPlots1,
+                    labels = list("A"), label_size = 24,
+                    ncol = 1)
+FlxPlots
+```
+
+#### Supplemental Figure 2: Fluoxetine Vehicle Control and 4 uM Treatment Group Raw Endpoint Data
+
+```{r, plot-endpoint-data-for-smpl, fig.dim=c(10,10), message = FALSE}
+# Raw endpoint data for Fluoxetine vehicle control
+raw_stats1 <- endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(endp,conc)]
+raw_stats1_l <- data.table::melt(raw_stats1, id.vars = c("endp","conc"), variable.name = "stat")
+
+raw_plot_facet <- ggplot(endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")]) +
+                    geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+                    theme_bw() +
+                    theme(text = element_text(size = 16)) +
+                    facet_wrap(~endp, scales = "free") +
+                    scale_color_manual(values = colors[c(1,5)]) +
+                    scale_fill_manual(values = colors[c(1,5)])
+
+raw_plot_facet <- raw_plot_facet + 
+                    geom_vline(data = raw_stats1_l, aes(xintercept=value, linetype=stat), color = rep(colors[c(1,5)],26), size=1) +
+                                scale_linetype_discrete(labels = c("Mean","Median")) +
+                                labs(title = "Raw Endpoint Data for Fluoxetine Vehicle Control and High Concentration Group",
+                                       color = paste0("Concentration (", unit.conc, ")"),
+                                       fill = paste0("Concentration (", unit.conc, ")"),
+                                       x = "Raw Endpoint Value",
+                                       y = "Density")
+raw_plot_facet
+```
+
+#### Supplemental Table 2: Calculate means and variance for raw endpoint data from Fluoxetine vehicle control and stick into table.
+
+```{r, SPT1-means-var-raw}
+sample.endp.stats <- endp.data[wllt=="v", .(mean=mean(rval,na.rm=T), variance=stats::var(rval,na.rm=T)), by=.(endp)]
+sample.endp.stats[, `:=` (mean = signif(mean,digits=3), variance = signif(variance,digits=3))]
+DT::datatable(sample.endp.stats, colnames=c("Endpoint Abbreviation","Mean","Variance"),
+              caption = "Raw Endpoint Data Statistics for Fluoxetine Vehicle Control")
+```
+
+#### Supplemental Figure 3: Fluoxetine Vehicle Control and High Concentration Group Transformed Endpoint Data
+
+```{r, plot-transf-endpoint-data-for-smpl, fig.dim=c(10,10), message = FALSE}
+trans_stats1 <- endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(endp,conc)]
+trans_stats1_l <- data.table::melt(trans_stats1, id.vars = c("endp","conc"), variable.name = "stat")
+
+trans_plot_facet <- ggplot(endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")]) +
+                      geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+                      theme_bw() +
+                      theme(text = element_text(size = 16)) +
+                      facet_wrap(~endp, scales = "free") +
+                      scale_color_manual(values = colors[c(1,5)]) +
+                      scale_fill_manual(values = colors[c(1,5)])
+
+trans_plot_facet <- trans_plot_facet + 
+                      geom_vline(data = trans_stats1_l, aes(xintercept=value, linetype=stat), color = rep(colors[c(1,5)],26), size=1) +
+                                scale_linetype_discrete(labels = c("Mean","Median")) +
+                                labs(title = "Raw Endpoint Data for Fluoxetine Vehicle Control and High Concentration Group",
+                                       color = paste0("Concentration (", unit.conc, ")"),
+                                       fill = paste0("Concentration (", unit.conc, ")"),
+                                       x = "Raw Endpoint Value",
+                                       y = "Density")
+
+trans_plot_facet
+```
+
+#### Supplemental Table 3: Calculate means and variance for transformed endpoint data from Fluoxetine vehicle control and stick into table.
+
+```{r, SPT1-means-var-raw}
+sample.endp.stats_n <- endp.data_n[wllt=="v", .(mean=mean(rval,na.rm=T), variance=stats::var(rval,na.rm=T)), by=.(endp)]
+sample.endp.stats_n[, `:=` (mean = signif(mean,digits=3), variance = signif(variance,digits=3))]
+DT::datatable(sample.endp.stats_n, colnames=c("Endpoint Abbreviation","Mean","Variance"),
+              caption = "Transformed Endpoint Data Statistics for Fluoxetine Vehicle Control")
+```
+
+#### Supplemental Table 4: Box-Cox power transformation parameters.
+
+```{r, Box-Cox Parameters}
+bxcx.params <- lapply(mc0_n, function(data) {
+  as.data.table( data[c(2,3)] )
+})
+
+bxcx.params.dt <- do.call('rbind', bxcx.params)
+bxcx.params.dt[, endp := names(bxcx.params)]
+
+datatable(bxcx.params.dt[, .(endp,lam.hat,shift)], colnames=c("Endpoint Abbreviation","Lambda","Shift"),
+              caption = "Box-Cox Power Transformation Parameters for Endpoints")
+```
+
+### Applying tcplFit2
+
+How many chemical-endpoint pair were active? How many chemicals had at least one active endpoint?
+
+```{r, active-chemicals-endpoints}
+# Endpoints to exclude
+exclude <- c("AUC_L","AUC_D","AUC_T")
+
+# Number of active chemical-endpoint pairs
+tcpl_out.dt[hitcall>0.8 & !endp%in%exclude, .N]
+
+# Number of active chemicals
+length( tcpl_out.dt[hitcall>0.8 & !endp%in%exclude, unique(name)] )
+```
+
+Evaluating popular fits.
+
+```{r, evaluating-popular-fits}
+# Popular fits for all endpoint data
+tcpl_out.dt[!endp%in%exclude, .N, by = .(fit_method)]
+
+# Popular fits for active curve-fits
+tcpl_out.dt[!endp%in%exclude & hitcall>0.8, .N, by = .(fit_method)]
+```
+
+Evaluate the the occurrence of developmental toxicity for chemicals fit optimally by the poly1 function.
+
+```{r, evaluate-hits-with-poly1}
+# Isolate chemicals with active endpoints optimally fitted by poly1
+chemicals <- tcpl_out.dt[hitcall>0.8 & fit_method=="poly1" & !endp%in%c("AUC_L","AUC_D","AUC_T"), unique(name)]
+
+# Is developmental toxicity associated with these chemicals?
+litReviewConc[, dev_LOEL := min(.SD[devtox==1,conc]), by=.(cpid)]
+litReviewConc[is.infinite(dev_LOEL), dev_LOEL := NA]
+litReviewConc[cpid%in%chemicals, .(dev_LOEL = unique(dev_LOEL)), by = .(cpid)]
+```
+
+### Activity in Terms of Endpoints
+
+#### Supplemental Table 5: Number of chemicals active in each endpoint.
+
+```{r, number-of-chemicals-active}
+count.hits.endp <- tcpl_out.dt[hitcall>0.8 & !endp%in%exclude, unique(name), by = .(endp)][, .N, by = .(endp)]
+
+datatable(count.hits.endp[order(-N)], colnames=c("Endpoint Abbreviation","Number of Active Chemicals"), caption = "Number of Chemicals Active in Each Endpoint",
+          rownames = FALSE)
+```
+
+#### Figure 3: Count of Active Chemicals by Phase and Endpoint Category
+
+```{r, active-by-category-phase, fig.dim=c(20,10)}
+tcpl_out.actives <- tcpl_out.dt[hitcall>0.8 & !endp%in%c("AUC_L","AUC_D","AUC_T","AUC_r")]
+
+tcpl_out.actives[endp%in%c("avgS_L","avgS_D","avgS_T"), cat1 := "Average Speed"]
+tcpl_out.actives[endp%in%c("hbt1_L","hbt1_D","hbt2_L","hbt2_D"), cat1 := "Habituation"]
+tcpl_out.actives[endp%in%c("RoA_L","RoA_D"), cat1 := "Range of Activity"]
+tcpl_out.actives[endp%in%c("strtlA","strtlAavg","strtlF"), cat1 := "Startle Response"]
+
+tcpl_out.actives[endp%in%c("avgS_L","hbt1_L","hbt2_L","RoA_L"), cat2 := "Light"]
+tcpl_out.actives[endp%in%c("avgS_D","hbt1_D","hbt2_D","RoA_D"), cat2 := "Dark"]
+tcpl_out.actives[endp%in%c("strtlA","strtlAavg","strtlF"), cat2 := "Transition"]
+tcpl_out.actives[endp%in%c("avgS_T"), cat2 := "Total"]
+
+actv.chem.cat1 <- tcpl_out.actives[, .(cat1 = factor(unique(cat1),levels=c("Average Speed","Habituation",
+                                                                           "Range of Activity","Startle Response"))),
+                                   by=.(name)]
+actv.chem.cat2 <- tcpl_out.actives[, .(cat2 = factor(unique(cat2),levels=c("Light","Transition","Dark","Total"))),
+                                   by=.(name)]
+
+activesCatCntPlot <- ggplot(actv.chem.cat1, aes(x=cat1, color=cat1, fill=cat1)) +
+                      geom_bar() +
+                      stat_count(geom = "text", colour = "black", size = 8.5,
+                                 aes(label = paste(..count..,"22",sep="/")), position=position_stack(vjust=1.05)) +
+                      theme_bw() +
+                      theme(text = element_text(size=20)) + 
+                      labs(x="Endpoint Categories",
+                           y="Number of Chemicals Active in Category",
+                           color="Endpoint Category",
+                           fill="Endpoint Category") +
+                      scale_y_continuous(breaks=c(2,4,6,8,10)) +
+                      scale_x_discrete(labels=c("Average Speed","Habituation","Range of Activity","Startle Response")) +
+                      scale_color_manual(values=viridis::viridis(4),
+                                         labels=c("Average Speed","Habituation","Range of Activity","Startle Response")) +
+                      scale_fill_manual(values=viridis::viridis(4),
+                                        labels=c("Average Speed","Habituation","Range of Activity","Startle Response"))
+
+
+activesPhsCntPlot <- ggplot(actv.chem.cat2, aes(x=cat2, color=cat2, fill=cat2)) +
+                            geom_bar() +
+  stat_count(geom = "text", colour = "black", size = 8.5,
+             aes(label = paste(..count..,"22",sep="/")), position=position_stack(vjust=1.05)) +
+                            theme_bw() +
+                            theme(text = element_text(size=20)) + 
+                            labs(x="Experimental Phase",
+                                 y="Number of Chemicals Active in Phase",
+                                 color="Experimental Phase",
+                                 fill="Experimental Phase") +
+                                 scale_y_continuous(breaks=c(2,4,6,8,10,12)) +
+                                 scale_color_manual(values=viridis::viridis(4)) +
+                                 scale_fill_manual(values=viridis::viridis(4))
+
+cowplot:::plot_grid(activesCatCntPlot, activesPhsCntPlot,
+                    labels = "AUTO", label_size = 24,
+                    ncol = 2)
+```
+
+#### Supplemental Figure 4: Combinations of Endpoint Category and Experimental Phase Activity
+
+```{r, combo-plots, fig.dim=c(13,10)}
+endp.lists <- split(actv.chem.cat1[,cat1], actv.chem.cat1[,name])
+to.plot <- data.table(name = names(endp.lists), list = endp.lists)
+
+phase.lists <- split(actv.chem.cat2[,cat2], actv.chem.cat2[,name])
+to.plot1 <- data.table(name = names(phase.lists), list = phase.lists)
+
+plot <- ggplot(to.plot, aes(x=list)) +
+          geom_bar() +
+          theme_bw() +
+          labs(x = "Endpoint Category Combinations",
+               y = "Number of Chemicals with Combination",
+               title = "Combinations of Endpoint\nActivity by Endpoint Category") +
+          theme(text = element_text(size=20),
+                 axis.title.x = element_text(size=18),
+                 axis.title.y = element_text(size=18)) +
+          ggupset::scale_x_upset(reverse = TRUE) +
+          theme_combmatrix(combmatrix.label.text = element_text(size=18),
+                           combmatrix.panel.point.size = 5)
+
+plot1 <- ggplot(to.plot1, aes(x=list)) +
+          geom_bar() +
+          theme_bw() +
+          labs(x = "Experimental Phase Combinations",
+               y = NULL,
+               title = "Combinations of Endpoint\nActivity by Experimental Phase") + 
+         theme(text = element_text(size=20),
+               axis.title.x = element_text(size=18),
+               axis.title.y = element_text(size=18)) +
+        ggupset::scale_x_upset(reverse = TRUE) +
+        theme_combmatrix(combmatrix.label.text = element_text(size=18),
+                         combmatrix.panel.point.size = 5)
+
+cowplot::plot_grid(plot, plot1, rel_widths = c(9,8),
+                   labels = "AUTO", label_size = 24)
+```
+
+Directionality of endpoint activity was taken from BMC heatmap which will be presented in BMC section
+
+### Results in Terms of Chemicals
+
+Chemicals that were active in endpoints other than Average Speed endpoints.
+
+```{r, chms-actve-no-avgS}
+active.avgS <- tcpl_out.dt[hitcall>0.8 & endp%in%c("AUC_L","AUC_D","AUC_T"), unique(name)]
+tcpl_out.dt[hitcall>0.8 & !name%in%active.avgS & !endp%in%exclude, unique(name)]
+```
+
+Linear Regression of Chlorpyrifos Average Speed in Dark
+
+```{r, cpf_avgS_LR}
+cpf_row <- rows_n[["Chlorpyrifos"]][["avgS_D"]]
+
+cpf_dt <- data.frame(conc = c(cpf_row$conc,rep(0,length(cpf_row$bresp))),
+                     resp = c(cpf_row$resp,cpf_row$bresp))
+cpf_dt$conc = cpf_dt$conc - mean(cpf_dt$conc)
+
+# Regress responses with a linear model
+cpf_lm <- lm(resp ~ conc, data = cpf_dt)
+confint(cpf_lm)
+```
+
+
+#### Figure 4: Behavior profiles of Chlorpyrifos with active endpoints.
+
+```{r, CPF-SA-timeSeries}
+chemical <- "Chlorpyrifos"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(lmr0.egid[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- lmr0.egid[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+SAplot_CPF <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-2.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-2.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-1.3,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=5) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 22))
+```
+```{r, CPF-active-curves}
+row1_CPF <- rows_n[[chemical]][["strtlAavg"]]
+row2_CPF <- rows_n[[chemical]][["hbt1_D"]]
+
+fit1_CPF <- concRespCoreZR(row1_CPF, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] +
+              theme(text = element_text(size=22))
+legend <- cowplot::get_legend(fit1_CPF)
+
+fit1_CPF <- fit1_CPF + 
+              theme(text = element_text(size=18), legend.position = "none") +
+              labs(title = "Startle Acceleration versus\nAverage Speed in Light", subtitle = "")
+fit2_CPF <- concRespCoreZR(row2_CPF, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] + 
+              theme(text = element_text(size=18), legend.position = "none") +
+              labs(y = "", title = "Habituation 1 in Dark")
+```
+```{r, grid-plot, fig.dim=c(17,17)}
+p1_CPF <- cowplot::plot_grid(NULL, SAplot_CPF, NULL, nrow=1, rel_widths = c(.5,2,.5), labels = c("","A",""), label_size = 24)
+p2_CPF <- cowplot::plot_grid(fit1_CPF, fit2_CPF, legend, nrow=1, rel_widths = c(1,1,.4), labels = list("B","C"), label_size = 24)
+cowplot::plot_grid(p1_CPF, p2_CPF, nrow=2)
+```
+
+#### BMC Heatmap to be displayed later.
+
+```{r, load-BMC-data}
+ac <- c("avgS_L", "hbt1_L", "hbt2_L","RoA_L",
+        "strtlA","strtlAavg", "strtlF",
+        "avgS_D","hbt1_D", "hbt2_D", "RoA_D",
+        "avgS_T","AUC_r")
+
+## Gather BMC's
+bmc <- lapply(tcplfits_n, function(chm) unlist(lapply(chm, function(fit) {
+  hitcall <- fit[["summary"]]$hitcall
+  bmd <- fit[["summary"]]$bmd
+  if (!(hitcall>0.8 & !is.na(bmd) & bmd != 0)) {
+    bmd <- 10000
+  }
+  bmd
+})))
+bmc <- do.call("rbind", bmc)
+bmc <- log10(bmc[,colnames(bmc)%in%ac])
+
+# Identify active chemicals
+actives <- rownames(bmc)[apply(bmc, 1, function(row) any(row < 4))]
+
+# PBDE-47 name is too long
+rownames(bmc)[50] <- "PBDE-47"
+actives[19] <- "PBDE-47"
+```
+```{r, layer-matrix}
+# Create a matrix specifying if an up, down, up and down, or down and up arrow should be printed in cells.
+fit.data <- lapply(tcplfits_n, function(chm) chm[-c(1,9,14)])
+layer.mat <- lapply(fit.data, function(chm) unlist(lapply(chm, function(fit) {
+                hitcall <- fit[["summary"]]$hitcall
+                fit_method <- fit[["summary"]]$fit_method
+                dir <- sign(fit[["summary"]]$top)
+                if (hitcall>0.8 & fit_method=="gnls" & dir==1) {
+                  layer <- 0
+                } else if (hitcall>0.8 & fit_method=="gnls" & dir==-1) {
+                  layer <- 1
+                } else if (hitcall>0.8 & dir==1) {
+                  layer <- 2
+                } else if (hitcall>0.8 & dir==-1) {
+                  layer <- 3
+                } else layer <- 4
+              })))
+layer.mat <- do.call("rbind", layer.mat)
+rownames(layer.mat)[50] <- "PBDE-47" # Change PBDE-47 name to match BMD matrix
+layer.mat1 <- layer.mat[row.names(layer.mat) %in% actives,]
+
+# Change rownames to include the number of active endpoints per chemical
+to.fit.rownames <- tcpl_out.dt[hitcall>0.8, .N, by=.(name)][, paste0(name," (",N,")")]
+to.fit.rownames[19] <- "PBDE-47 (5)"
+
+rownames(layer.mat1) <- to.fit.rownames
+```
+```{r, heatmap-legends-labels, warning=FALSE}
+# Column labels
+col_labels <- c(expression("Average Speed in Light"^1), "Habiutation 1 in Light", "Habituation 2 in Light", expression("Range of Activity in Light"),
+                "Startle Acceleration", "Startle Relative to Avg. Speed in Light", "Startle Fold-Change",
+                expression("Average Speed in Dark"^1), "Habituation 1 in Dark", "Habituation 2 in Dark", expression("Range of Activity in Dark"),
+                "Average Speed in Both Phases", expression("AUC in Dark / AUC in Light Ratio"^2)) # Superscripts notate references in poster
+# Legends
+
+# Custom heat legend.
+f2 = circlize::colorRamp2(seq(min(bmc), max(bmc), length = 8), rev(viridis(8)), space = "sRGB")
+heat_lgd = Legend(col_fun = f2,
+                  title = paste0("BMC log(","\U03BC","M)"),
+                  title_position = "lefttop",
+                  legend_width = unit(4,"cm"),
+                  direction = "horizontal")
+# Column annotation by phase legend.
+ann_lgd = Legend(labels = c("Light","Transition","Dark","Light+Dark"),
+                 title = "Phase",
+                 title_position = "leftcenter",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 legend_gp = grid::gpar(fill = c("white","grey","black","red")),
+                 border = TRUE,
+                 nrow = 1,
+                 column_gap = unit(5, 'mm'))
+# Legend for cell signal arrows.
+dir_lgd = Legend(labels = c(paste("\U2191","Gain"),
+                            paste("\U2193","Loss"),
+                            paste("\U21C5","GainLoss"),
+                            paste("\U21F5","LossGain")),
+                 title = "Signal Direction",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 title_position = "leftcenter",
+                 nrow = 1,
+                 column_gap = unit(0, 'mm')) # Will produce warnings, don't worry.
+lgd_list <- packLegend(ann_lgd, dir_lgd)
+
+# Create column annotation indicating the phase of the LMR that is described.
+column_ha <- ComplexHeatmap::HeatmapAnnotation(Phase = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                                        levels=c("Light","Transition","Dark","Light+Dark")),
+                                               border = TRUE,
+                                               simple_anno_size = unit(0.25, 'cm'),
+                                               col = list(Phase=c("Light"="white",
+                                                                  "Transition"="grey",
+                                                                  "Dark"="black",
+                                                                  "Light+Dark"="red")),
+                                               annotation_legend_param = list(nrow = 1),
+                                               show_annotation_name = FALSE,
+                                               show_legend = FALSE)
+
+# Create function to add arrows indicating signal direction in cells.
+cell_fun <- function(j, i, x, y, width, height, fill) {
+  if (layer.mat1[i,j] == 0) {
+    grid.text("\U21C5", x, y, gp=gpar(fontsize=8))
+  } else if (layer.mat1[i,j] == 1) {
+    grid.text("\U21F5", x, y, gp=gpar(fontsize=8))
+  } else if (layer.mat1[i,j] == 2) {
+    grid.text("\U2191", x, y, gp=gpar(fontsize=8))
+  } else if (layer.mat1[i,j] == 3) {
+    grid.text("\U2193", x, y, gp=gpar(fontsize=8))
+  }
+}
+```
+```{r, heatmap, warning=FALSE, fig.dim=c(8,8)}
+# isolate data for heatmap
+to.fit <- bmc[row.names(bmc) %in% actives,]
+rownames(to.fit) <- to.fit.rownames
+
+# Create main heat map.
+htlist <- ComplexHeatmap::Heatmap(to.fit,
+
+                        # Specify some parameters for heat legend.
+                        name = paste0("BMC log(","\U03BC","M)"),
+                        col = f2,
+                        border_gp = grid::gpar(col="black",lwd=1),
+                        rect_gp=grid::gpar(col="grey"),
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(legend_height = unit(3.5,"cm"),
+                                                    direction = "vertical",
+                                                    title_gp = grid::gpar(fontsize=10),
+                                                    labels_gp = grid::gpar(fontsize=10)),
+
+                        # Heatmap width and height
+                        # width = unit(16,"in"),
+                        # height = unit(18,"in"),
+
+                        # Column label parameters
+                        column_labels = col_labels, column_names_rot = 45,
+
+
+                        # Split columns by phase.
+                        column_split = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                              levels=c("Light","Transition","Dark","Light+Dark")),
+
+                        # Specify some column parameters.
+                        column_title = NULL,
+                        top_annotation = column_ha,
+
+                        # Add signal direction arrows.
+                        cell_fun = cell_fun,
+
+                        # Specify some parameters row dendrogram aesthetics and row labels.
+                        row_title_side = "right",
+                        row_title_rot = 0,
+                        row_split = 5,
+                        row_dend_side = "right",
+                        row_names_side = "left",
+
+                        # Clustering parameters.
+                        cluster_columns = FALSE,
+                        cluster_rows = TRUE,
+                        clustering_distance_rows = "pearson",
+
+                        # Font sizes
+                        row_names_gp = grid::gpar(fontsize=10),
+                        column_names_gp = grid::gpar(fontsize=10),
+                        row_title_gp = grid::gpar(fontsize=10),
+                        column_title_gp = grid::gpar(fontsize=10)
+                        )
+```
+
+#### Supplemental Figure 5: Activity in endpoints other than Average Speed endpoints.
+
+```{r, layerMat-cellFun}
+isolate <- actives[order(actives)]
+isolate <- c(isolate[c(1,2,6,8,21)], isolate[c(10,12,13,20,22)])
+
+layer.mat2 <- layer.mat[isolate,]
+
+cell_fun1 <- function(j, i, x, y, width, height, fill) {
+  if (layer.mat2[i,j] == 0) {
+    grid.text("\U21C5", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 1) {
+    grid.text("\U21F5", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 2) {
+    grid.text("\U2191", x, y, gp=gpar(fontsize=12))
+  } else if (layer.mat2[i,j] == 3) {
+    grid.text("\U2193", x, y, gp=gpar(fontsize=12))
+  }
+}
+```
+```{r, new-activity, fig.dim=c(6,6), warning=FALSE}
+htlist2 <- ComplexHeatmap::Heatmap(bmc[isolate,],
+
+                        # Specify some parameters for heat legend.
+                        name = paste0("BMC log(","\U03BC","M)"),
+                        col = f2,
+                        border_gp = grid::gpar(col="black",lwd=1),
+                        rect_gp=grid::gpar(col="grey"),
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(legend_height = unit(3.5,"cm"),
+                                                    direction = "vertical",
+                                                    title_gp = grid::gpar(fontsize=10),
+                                                    labels_gp = grid::gpar(fontsize=10)),
+
+                        # Heatmap width and height
+                        # width = unit(16,"in"),
+                        # height = unit(18,"in"),
+
+                        # Column label parameters
+                        column_labels = col_labels, column_names_rot = 45,
+
+
+                        # Split columns by phase and row by activity type
+                        column_split = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                              levels=c("Light","Transition","Dark","Light+Dark")),
+                        # row_split = factor(c(rep("1",5), rep("2",5))),
+
+                        # Specify some column parameters.
+                        column_title = NULL,
+                        top_annotation = column_ha,
+
+                        # Add signal direction arrows.
+                        cell_fun = cell_fun1,
+
+                        # Specify some parameters row dendrogram aesthetics and row labels.
+                        row_title = NULL,
+                        row_title_rot = 0,
+                        #row_split = 3,
+                        row_names_side = "left",
+
+                        # Clustering parameters.
+                        cluster_columns = FALSE,
+                        cluster_rows = FALSE,
+
+                        # Font sizes
+                        row_names_gp = grid::gpar(fontsize=12),
+                        column_names_gp = grid::gpar(fontsize=12),
+                        row_title_gp = grid::gpar(fontsize=16),
+                        column_title_gp = grid::gpar(fontsize=16)
+                        )
+
+ht <- draw(htlist2, merge_legend = FALSE, annotation_legend_list = lgd_list,
+           annotation_legend_side = "top", align_annotation_legend = "heatmap_center")
+ro <- row_order(ht)
+co <- column_order(ht)
+
+# Highlight startle endpoints and average acceleration in Dark endpoint
+decorate_heatmap_body(paste0("BMC log(","\U03BC","M)"), row_slice = 1, column_slice = 1, {
+  grid.rect(unit(1.025,'npc'), unit(0.7,'npc'),
+            width = (length(co[[1]]) + length(co[[2]]))/length(co[[1]]) * unit(0.415,'npc') + unit(1,'mm'),
+            height = (length(ro[[1]]) + length(ro[[2]]))/length(ro[[1]]) * unit(0.344,'npc') + unit(1,'mm'),
+            gp = gpar(lwd=2, lty=1, fill=NA, col="red"), just=c('left','top')
+  )
+}) 
+decorate_heatmap_body(paste0("BMC log(","\U03BC","M)"), row_slice = 1, column_slice = 1, {
+  grid.rect(unit(2.05,'npc'), unit(1,'npc'),
+            width = (length(co[[1]]) + length(co[[2]]))/length(co[[1]]) * unit(0.13,'npc') + unit(1,'mm'),
+            height = (length(ro[[1]]) + length(ro[[2]]))/length(ro[[1]]) * unit(0.245,'npc') + unit(1,'mm'),
+            gp = gpar(lwd=2, lty=1, fill=NA, col="red"), just=c('left','top')
+  )
+})
+```
+
+#### Supplemental Table 6: Number of hits per active chemical.
+
+```{r, number-of-hits-per-active}
+count.hits.chm <- tcpl_out.dt[hitcall>0.8 & !endp%in%exclude, .N, by = .(name)]
+datatable(count.hits.chm[order(-N)], colnames=c("Chemical Name","Number of Hits"), caption = "Number of Hits per Chemical",
+          rownames = FALSE)
+```
+
+#### Supplemental Figure 6: Create plots for comparing Paraquat and Heptachlor epoxide activity profiles.
+
+```{r, HepEpox-bhv-profiles}
+chemical <- "Heptachlor epoxide"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(lmr0.egid[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- lmr0.egid[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+plot.HepEpox <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=3) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 18))
+```
+```{r, HepEpox-signal}
+signal.HepEpox <- tcpl_out.dt[name=="Heptachlor epoxide" & hitcall>0.8 & !endp%in%exclude, .(endp,top_over_cutoff)]
+table.HepEpox <- gridExtra::tableGrob(signal.HepEpox, rows = NULL, cols = c("Endpoint Abbreviation", "Top Over Cutoff"))
+
+# Add table grob
+plot.HepEpox <- plot.HepEpox + 
+                  annotation_custom(table.HepEpox, xmin=13, xmax=23, ymin=10, ymax=12)
+```
+```{r, Paraquat-bhv-profiles}
+chemical <- "Paraquat"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(lmr0.egid[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- lmr0.egid[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+plot.Paraquat <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=3) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 18))
+
+# Paraquat signal
+signal.Paraquat <- tcpl_out.dt[name=="Paraquat" & hitcall>0.8 & !endp%in%exclude, .(endp,top_over_cutoff)]
+table.Paraquat <- gridExtra::tableGrob(signal.Paraquat, rows = NULL, cols = c("Endpoint Abbreviation", "Top Over Cutoff"))
+
+# Add table grob
+plot.Paraquat <- plot.Paraquat + 
+                  annotation_custom(table.Paraquat, xmin=13, xmax=23, ymin=12, ymax=16)
+```
+```{r, fig.dim=c(20,13)}
+cowplot::plot_grid(plot.HepEpox, plot.Paraquat, ncol = 2, nrow = 1)
+```
+
+### Potential Reference Chemicals
+
+#### Supplemental Table 7: Active Chemicals Inducing the Strongest Signal in Endpoints
+
+```{r, refer-chem}
+aenms <- strgEffectors_byEndp[, unique(aenm)]
+
+# Format data and print as a good table
+strgEffectors_formatted <- strgEffectors_byEndp[order(aenm), .(aenm,direction,cpid,conc,rval)]
+strgEffectors_formatted[, rval:=round(rval, digits=2)]
+setnames(strgEffectors_formatted, names(strgEffectors_formatted),
+         c("Assay Endpoint Name","Signal Direction","Chemical Name",paste0("Concentration ","(\U03BC","M)"),"SEs from Control Mean"))
+datatable(strgEffectors_formatted)
+```
+
+### BMC Estimates
+
+#### Supplemental Table 8: Median BMC and BMC Ranges across active endpoints for active chemicals
+
+```{r, median-BMCs-chm}
+select <- apply(bmc, 1, function(row) any(row<4))
+med_BMC <- bmc[select,]
+med_BMC[med_BMC==4] <- NA
+
+med_BMC.dt <- as.data.table( t(apply(med_BMC, 1, summary, na.rm=TRUE)), keep.rownames = "Chemical Name" )
+med_BMC.dt[, `:=` ("1st Qu."=NULL,"Mean"=NULL,"3rd Qu."=NULL,"NA's"=NULL), with=FALSE]
+med_BMC.dt[, `:=` (`Min.`=10^`Min.`,`Median`=10^`Median`,`Max.`=10^`Max.`)]
+med_BMC.dt[, `:=` (`Min.`=signif(`Min.`, digits=3),`Median`=signif(`Median`, digits=3),`Max.`=signif(`Max.`, digits=3))]
+
+datatable(med_BMC.dt, rownames = FALSE, 
+          caption = "Minimum, Median,and Maximum BMCs of Active Chemicals Across Active Endpoints",
+          colnames = c("Chemical Name", paste0("Minimum BMC (","\U03BC","M)"),
+                       paste0("Median BMC (","\U03BC","M)"),
+                       paste0("Maximum BMC (","\U03BC","M)")
+          )
+)
+```
+
+#### Supplemental Figure 8: Diazepam behavior data and active curve-fits.
+
+```{r, SA-plot-function}
+plot_SA <- function(chemical) {
+              # Units
+              unit.t = "min"
+              unit.mov = "cm"
+              unit.conc = paste0("\U03BC","M")
+              prsp = "SA"
+              no.A = 10
+
+              # Extract chemical data
+              group <- unique(lmr0.egid[cpid == chemical, egid])
+
+              ## Identify movement columns of interest
+              t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+              cols <- t.cols[(no.A+1):length(t.cols)]
+              A.cols <- t.cols[!(t.cols%in%cols)]
+
+              ## extract data to be plotted, exclude acclimation
+              to.fit <- lmr0.egid[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+              # create appropriate axes titles for plots
+              label.y <- "Speed"
+
+              # Format data for plotting
+
+              ## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+              exclude.A <- t.cols[!(t.cols%in%A.cols)]
+              means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                              .SDcols = exclude.A,
+                              by = conc]
+
+              ## calculate CI's for transformed values then transform back
+              shift <- 1
+              logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+                , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+              CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+              ## elongate means and CIs data, and join
+              means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+              means_long[, t := sub("vt","",t)]
+              CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+              CIs_long[, t := sub("vt","",t)]
+              stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+              stats[, t := as.numeric(t)]
+
+              # create standard error of mean estimates by time period and plot as ribbons or error bars
+
+              # plot time-series data
+
+              ## create title, x- and y-axis titles, legend labels, and legend title
+              title <- paste0("Sample Averaged Time-Series for ", chemical)
+              title.t <- paste0("Time (",unit.t,")")
+              title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+              conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+              legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+              title.legend <- paste0("Concentration (", unit.conc, ")")
+
+              ## get better colors for plotting
+              N <- length(unique(to.fit[,conc]))
+              colors <- viridis::viridis(N)
+
+              ## create x-axis breaks and labels
+              m <- as.integer(max(means_long[,t]))
+              x.breaks <- seq(from=no.A,to=m,by=10)
+              x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+              x.labels2 <- x.labels1 - 2
+              x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+              ## plot
+              plot <- ggplot() +
+                geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+                geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+                scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+                scale_color_manual(values = colors, labels=legend.labels) +
+                geom_ribbon(data = stats,
+                            aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                            alpha = 0.25) +
+                geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+                geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+                annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=5) +
+                scale_fill_manual(values = colors, labels=legend.labels) +
+                labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+                     x = title.t, y = title.mean, color = title.legend) +
+                guides(fill = "none") +
+                theme_bw() +
+                theme(text = element_text(size = 22))
+
+              return(plot)
+}
+```
+
+```{r, Diazepam-plots, fig.dim = c(17,17)}
+chemical <- "Diazepam"
+SAplot_Dzp <- plot_SA(chemical)
+row1_Dzp <- rows_n[[chemical]][["avgS_L"]]
+row2_Dzp <- rows_n[[chemical]][["RoA_L"]]
+row3_Dzp <- rows_n[[chemical]][["avgS_T"]]
+
+fit1_Dzp <- concRespCoreZR(row1_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] 
+
+legend_Dzp <- cowplot::get_legend(fit1_Dzp)
+
+fit1_Dzp <- fit1_Dzp + theme(legend.position = "none")
+fit2_Dzp <- concRespCoreZR(row2_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] + theme(legend.position = "none")
+fit3_Dzp <- concRespCoreZR(row3_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] + theme(legend.position = "none")
+
+p1 <- cowplot::plot_grid(fit1_Dzp, fit2_Dzp, fit3_Dzp, legend_Dzp, nrow=2)
+
+cowplot::plot_grid(SAplot_Dzp, p1, nrow=2)
+```
+
+#### Supplemental Figure 9: D-sorbitol behavior data and active curve-fits.
+
+```{r, Diazepam-plots, fig.dim = c(17,17)}
+chemical <- "D-sorbitol"
+SAplot_Srb <- plot_SA(chemical)
+
+row1_Srb <- rows_n[[chemical]][["hbt1_L"]]
+row2_Srb <- rows_n[[chemical]][["strtlA"]]
+row3_Srb <- rows_n[[chemical]][["strtlAavg"]]
+
+fit1_Srb <- concRespCoreZR(row1_Srb, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] 
+
+legend_Srb <- cowplot::get_legend(fit1_Srb)
+
+fit1_Srb <- fit1_Srb + theme(legend.position = "none")
+fit2_Srb <- concRespCoreZR(row2_Srb, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] + theme(legend.position = "none")
+fit3_Srb <- concRespCoreZR(row3_Srb, do.plot = TRUE, verbose.plot = FALSE)[["plot"]] + theme(legend.position = "none")
+
+p1_Srb <- cowplot::plot_grid(fit1_Srb, fit2_Srb, fit3_Srb, legend_Srb, nrow=2)
+
+cowplot::plot_grid(SAplot_Srb, p1, nrow=2)
+```
+
+#### Figure 5: BMC confidence interval overlap.
+
+```{r, BMC-CIs, fig.dim=c(10,10)}
+tcpl_out.dt <- as.data.table(DNT60_tcpl_out)
+
+to.plot <- tcpl_out.dt[hitcall>0.8 & endp%in%c("avgS_L","avgA_L","avgJ_L","hbt_L",
+                                                 "strtlA","strtlAavg","strtlF",
+                                                 "avgS_D","avgA_D","avgJ_D","hbt_D",
+                                                 "avgS_T","AUC_r")]
+to.plot[, endp := factor(endp, levels=rev(c("avgS_L","avgA_L","avgJ_L","hbt_L",
+                                        "strtlA","strtlAavg","strtlF",
+                                        "avgS_D","avgA_D","avgJ_D","hbt_D",
+                                        "avgS_T","AUC_r")))]
+to.plot[name=="Polybrominated diphenyl ether (PBDE)-47", name:="PBDE-47"]
+BMC_facet <- ggplot(to.plot, aes(x=log10(bmd),y=endp)) +
+  geom_point() +
+  geom_errorbar(aes(xmin=log10(bmdl), xmax=log10(bmdu))) +
+  scale_x_continuous(breaks=c(-3,-2,-1,0,1,2)) +
+  facet_wrap(. ~ name)+
+  theme_bw() +
+  theme(text = element_text(size=18)) +
+  labs(title = "Overlap of BMC Estimates for Chemicals", x = "log(BMC)", y = "Endpoint")
+BMC_facet
+```
+
+#### Supplemental Figure 7: Amphetamine active curve-fits.
+
+```{r, Amphetamine-curveFits, fig.dim=c(10,10)}
+chemical <- "Amphetamine"
+
+row1 <- rows_n[[chemical]][["avgS_L"]]
+row2 <- rows_n[[chemical]][["hbt1_L"]]
+row3 <- rows_n[[chemical]][["strtlF"]]
+
+fit1 <- concRespCoreZR(row1, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit2 <- concRespCoreZR(row2, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit3 <- concRespCoreZR(row3, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+
+legend <- cowplot::get_legend(fit1)
+title <- cowplot::ggdraw() +
+  cowplot::draw_label("Amphetamine Exposure: Active Curve-Fits",
+                      x = 0, hjust = 0, size=24) +
+  theme(plot.margin = margin(0,0,0,7))
+
+edit_plot <- function(plot) {
+  title <- plot$labels$title
+  plot$labels$title <- gsub(paste0(chemical," for "), "", title)
+  plot$labels$subtitle <- NULL
+  plot <- plot + theme(legend.position="none")
+  return(plot)
+}
+
+plots <- lapply(list(fit1, fit2, fit3), edit_plot)
+plots_w_legend <- list(plots[[1]],plots[[2]],plots[[3]],legend)
+
+p1 <- cowplot::plot_grid(plotlist=plots_w_legend, nrow=2)
+p2 <- cowplot::plot_grid(p1, legend, rel_widths = c(3, .4))
+
+cowplot::plot_grid(title, p1, ncol=1, rel_heights = c(0.1,1))
+```
+
+#### Figure 6: BMC Heatmap
+
+```{r, BMC-heatmap}
+draw(htlist, merge_legend = FALSE, annotation_legend_list = lgd_list, annotation_legend_side = "top", align_annotation_legend = "heatmap_center")
+```
+
+### Concordance Between this Study and Other Studies
+
+Edit LOELs from this study so that only chemicals found active via tcplfit2 have LOELs calculated.
+
+```{r, edit-DNT60LOELs}
+bmc.long <- as.data.table( melt(bmc, value.name = "bmc") )
+names(bmc.long) <- c("cpid","endp","BMC")
+DNT60LOELs.long <- melt(DNT60LOELs, id.vars = "cpid", variable.name = "endp", value.name = "LOEL")
+active.pairs <- bmc.long[BMC<4, .(cpid,endp)]
+
+DNT60LOELs.long[!active.pairs, LOEL := NA, on = .(cpid,endp)]
+
+# Widen edited data to replace DNT60LOELs
+DNT60LOELs.1 <- dcast(DNT60LOELs.long, cpid ~ endp, value.var = "LOEL")
+```
+
+How many chemicals had papers associated with them?
+
+```{r, num-associated-papers}
+litReviewSummary[Number.of.associated.publications!=0, .N]
+```
+
+How many papers of the 34 report chemical effect.
+
+```{r, papers-detect-activity}
+length( litReviewConc[neurotox==1 & DOI!="DNT60", unique(DOI)] )
+```
+
+#### Supplemental Table 9: Literature Review Summary of Findings
+
+```{r, lit-review-Summary-table}
+litReviewSummary1 <- litReviewSummary[,-c(2,3,4)]
+DT::datatable(litReviewSummary1, caption="Formatted Literature Review table.",
+              extensions = 'FixedColumns',
+              colnames = c("Chemical Name", "Number of Reviewed Publications", "Number of Reviewed Publications Reporting Effect", "Percent of Publications Reporting Effect"),
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+#### Supplemental Table 10: Literature Review Summary for Active Chemicals in this Study
+
+```{r, lit-review-Summary-table}
+actives.1 <- actives
+actives.1[19] <- "Polybrominated diphenyl ether (PBDE)-47"
+litReviewSummary.subset <- litReviewSummary1[cpid %in% actives.1]
+DT::datatable(litReviewSummary.subset, caption="Number of Publications and Activity Reporting for Active Chemicals",
+              extensions = 'FixedColumns',
+              colnames = c("Chemical Name", "Number of Reviewed Publications", "Number of Reviewed Publications Reporting Effect", "Percent of Publications Reporting Effect"),
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Find median LOELs for DNT60 study.
+
+```{r, calculate-median}
+# chmEndp_Active <- tcpl_out.dt[hitcall > 0.8, .(name,endp)]
+# DNT60LOELs.melt <- melt(DNT60LOELs, id.vars = "cpid", variable.name="endp", value.name="bhvLOEL")
+# DNT60LOELs.melt[chmEndp_Active, on = .(cpid,endp)]
+
+DNT60_medLOELs <- DNT60LOELs.1[, .(cpid, med_LOEL = matrixStats::rowMedians(as.matrix(.SD),na.rm=TRUE)), .SDcols=names(DNT60LOELs.1)[-1]]
+```
+
+#### Table 2: Use median gabi behavioral LOELs to compare to other studies.
+
+```{r, compare-LOELs}
+compareLOELs <-litReviewLOELs[DOI != "DNT60"][DNT60_medLOELs, on = .(cpid)]
+setnames(compareLOELs, "med_LOEL", "DNT60_med_LOEL")
+compareLOELs[, LOEL_diff := neuro_LOEL - DNT60_med_LOEL]
+
+compareLOEL_summary <- compareLOELs[, .(median_bhvLOEL_diff = median(LOEL_diff,na.rm=T), sd_diff_mag = sd(LOEL_diff,na.rm=TRUE)), by = .(cpid)][order(sd_diff_mag)]
+
+compareLOEL_summary[, `:=` (median_bhvLOEL_diff = signif(median_bhvLOEL_diff,digits=3), sd_diff_mag = signif(sd_diff_mag,digits=3))]
+
+DT::datatable(compareLOEL_summary,
+              caption="Summarize Differences in LOEL Magnitudes",
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+### The Effect of Developmental Toxicity on the Detection of Neurotoxicity
+
+How many chemicals have at least one associated paper that reports chemical activity?
+
+```{r, chems-with-active-studies}
+litReview_actives <- litReviewConc[DOI!="DNT60" & neurotox==1, unique(cpid)]
+length(litReview_actives)
+```
+
+```{r, LOELs-to-dt, warning = FALSE}
+# Gather data for later plots and questions
+DNT60LOELs.long[, `:=` (DOI="DNT60", category="intra_neuro")]
+
+compareLOELs.1 <- litReviewLOELs[DOI != "DNT60",-"dev_LOEL", with=FALSE][, .(cpid, DOI, LOEL=neuro_LOEL, category="inter_neuro")]
+dev_LOELs <- litReviewLOELs[, .(LOEL=unique(dev_LOEL),category="intra_dev"), by=.(cpid)]
+compareLOELs.2 <- rbind(DNT60LOELs.long, compareLOELs.1, dev_LOELs, fill = TRUE)
+```
+```{r, LOEL-inactives}
+discordant_inactives <- litReviewSummary[!cpid%in%c(actives,"Polybrominated diphenyl ether (PBDE)-47"), .(cpid, Number.of.associated.publications, Number.of.publications.with.activity, `%.of.papers.with.activity`)][`%.of.papers.with.activity`>50][order(-`%.of.papers.with.activity`)]
+```
+
+How many chemicals active in tcplFit2 analysis, with associated publications had an associated publication report observed effect at at least one concentration.
+
+```{r, activity-in-publications}
+actives.2 <- litReviewSummary.subset[Number.of.associated.publications!=0, unique(cpid)]
+table(actives.2 %in% litReview_actives)
+```
+
+How many chemicals had a majority of associated publications report activity?
+
+```{r}
+litReviewSummary.subset[`%.of.papers.with.activity`>50]
+```
+
+
+```{r, activity-in-publications}
+actives.2 <- litReviewSummary.subset[Number.of.associated.publications!=0, unique(cpid)]
+table(actives.2 %in% litReview_actives)
+```
+
+What chemicals were active in other publications (>50%) but inactive in our analysis?
+
+```{r, inactives-widely-active-in-studies}
+discordant_inactives
+discordant_inactives[Number.of.associated.publications > 1]
+```
+
+#### Table 3: Median differences between developmental LOELs and study behavioral LOELs.
+
+```{r, calc-dev-diffs}
+LOEL_diff_DN <- dev_LOELs[,.(cpid,dev_LOEL=LOEL)][compareLOELs.2[category == "inter_neuro", .(cpid, DOI, LOEL)], on = .(cpid)][, .(cpid, DOI, mag_diff=LOEL-dev_LOEL)]
+```
+```{r, compare-median-dev-diff}
+devBhvLOEL.diff <- LOEL_diff_DN[, .(median_mag_diff = median(mag_diff,na.rm=T), sd_mag_diff = sd(mag_diff,na.rm=T)), by = .(cpid)][order(-median_mag_diff)]
+
+DT::datatable(devBhvLOEL.diff[!is.na(median_mag_diff), .(cpid = cpid, median_mag_diff = signif(median_mag_diff,digits=3), sd_mag_diff = signif(sd_mag_diff,digits=3))], caption="Median Difference in Magnitude from Developmental LOEL to Literature Review Behavioral LOELs",
+              colnames = c("Chemical Name", "Median Magnitude Difference", "SD in Magnitude Difference"),
+              extensions = 'FixedColumns',
+              options = list(scrollX=TRUE),
+              rownames = FALSE)
+```
+
+Exclude those without majority of publications reporting activity.
+
+```{r, chms-devLOEL-comparison-majority}
+cpid_maj_active <- litReviewSummary[`%.of.papers.with.activity`>50 & Number.of.associated.publications>1, cpid]
+devBhvLOEL.diff[cpid %in% cpid_maj_active]
+```
+
+
+#### Figure 7: Developmental and nuero-toxic LOELs observed in this study and others.
+
+```{r, order-chems-on-LOEL-values}
+compareLOELs.to.plot <- data.table::copy(compareLOELs.2)
+
+cpid_wO_pub <- litReviewSummary[Number.of.associated.publications==0, unique(cpid)]
+cpid_w_pub <- litReviewSummary[Number.of.associated.publications!=0, unique(cpid)]
+
+# Compare LOELs has different spellings
+# Bis(tributyltin) oxide
+# Diethylene glycol
+
+compareLOELs.to.plot[cpid%in%cpid_w_pub, facet := 1]
+compareLOELs.to.plot[cpid%in%cpid_wO_pub, facet := 2]
+
+# Order chemicals in each facet first by developmental toxicity and then by median LOEL were devTox doesn't exist and then by median study LOEL where median LOEL doesn't exist
+factor.orderA1 <- rev( compareLOELs.2[cpid%in%cpid_w_pub & category=="intra_dev" & !is.na(LOEL)][order(-LOEL), unique(cpid)] )
+factor.orderB1 <- rev( compareLOELs.2[cpid%in%cpid_wO_pub & category=="intra_dev" & !is.na(LOEL)][order(-LOEL), unique(cpid)] )
+
+factor.orderA2 <- DNT60_medLOELs[!(cpid%in%factor.orderA1) & cpid%in%cpid_w_pub & !is.na(med_LOEL)][order(med_LOEL), unique(cpid)]
+factor.orderB2 <- DNT60_medLOELs[!(cpid%in%factor.orderB1) & cpid%in%cpid_wO_pub & !is.na(med_LOEL)][order(med_LOEL), unique(cpid)]
+
+factor.orderA3 <- compareLOELs.2[!(cpid%in%factor.orderA2) & !(cpid%in%factor.orderA1) & cpid%in%cpid_w_pub & category=="inter_neuro", .(med_LOEL = median(LOEL,na.rm=TRUE)), by = .(cpid)][!is.na(med_LOEL)][order(med_LOEL), unique(cpid)]
+factor.orderB3 <- compareLOELs.2[!(cpid%in%factor.orderB2) & !(cpid%in%factor.orderB1) & cpid%in%cpid_wO_pub][order(-cpid), unique(cpid)]
+
+factor.orderA4 <- compareLOELs.2[!(cpid%in%factor.orderA3) & !(cpid%in%factor.orderA2) & !(cpid%in%factor.orderA1) & cpid%in%cpid_w_pub][order(-cpid), unique(cpid)]
+
+factor.order <- c(factor.orderA4, factor.orderA3, factor.orderA2, factor.orderA1, factor.orderB3, factor.orderB2, factor.orderB1)
+
+compareLOELs.to.plot$cpid <- factor(compareLOELs.to.plot$cpid, levels=factor.order)
+```
+```{r, facet-labeller}
+facet_labels = list("1" = "Chemicals with Associated Publications",
+                   "2" = "Chemicals without Associated Publications")
+facet_labeller <- function(variable, value) {
+  return(facet_labels[value])
+}
+```
+```{r, compare-LOEL-figure, fig.dim=c(10,10)}
+compare_LOELs <- ggplot() +
+  geom_point(compareLOELs.to.plot, mapping = aes(x=LOEL, y=cpid, color=category, shape=category), size = 3) +
+  scale_shape_discrete(labels = c("Extra-Study Behavioral LOELs","Developmental LOEL","Study Behavioral LOELs")) +
+  scale_color_manual(labels = c("Extra-Study Behavioral LOELs","Developmental LOEL","Study Behavioral LOELs"), values=colors[c(1,8,4)]) +
+  theme_bw() +
+  theme(text = element_text(size=18)) +
+  facet_wrap(facet~., dir = "h", as.table = TRUE, drop = TRUE, scale = "free_y", strip.position = "right", labeller = facet_labeller) + 
+  labs(shape = "Critical Doses",
+       color = "Critical Doses",
+       x = paste0("Concentration (log10(",paste0("\U03BC","M"),"))"),
+       y = "Chemical Name")
+```
+
+#### Supplemental Figure 10: Unity plot of median potencies.
+
+```{r, format-data}
+# plot medians with quantiles and interquartile range
+cHairPlot.data1 <- compareLOELs.2[category=="intra_neuro", .(med=summary(LOEL)[3], Q1=summary(LOEL)[1], Q3=summary(LOEL)[5]), by=.(cpid)]
+cHairPlot.data2 <- compareLOELs.2[category=="inter_neuro", .(med_x=summary(LOEL)[3], Q1_x=summary(LOEL)[1], Q3_x=summary(LOEL)[5]), by=.(cpid)]
+# _x indicates values are derived from "extra" laboratory studies
+
+cHairPlot.data <- merge(cHairPlot.data1, cHairPlot.data2, all = TRUE)
+```
+```{r, unity-plot}
+unity_plot <- ggplot(cHairPlot.data, aes(x=med, y=med_x)) +
+  geom_point() + 
+  geom_abline(intercept=c(-1,0,1), slope = c(1,1,1), linetype=c("dashed","solid","dashed")) +
+  ggrepel::geom_text_repel(aes(label=cpid,color=cpid), box.padding = 0.5) +
+  lims(x=c(-2,2), y=c(-2,2)) +
+  labs(x = "Median Neurotoxic LOEL Observed in this Study",
+       y = "Median Neurotoxic LOEL Derived from Literature Review Studies",
+       title = "Concordance of Neurotoxic LOELs Across Studies") +
+  theme_bw() +
+  theme(legend.position="none")
+```

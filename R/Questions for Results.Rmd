@@ -1,0 +1,509 @@
+---
+title: "Questions for Results"
+author: "Zachary Rowson"
+date: "6/9/2022"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(gabi)
+library(data.table)
+library(ComplexHeatmap)
+library(gridExtra)
+library(viridis)
+library(grid)
+library(DT)
+```
+
+## Introduction
+
+In this document I will identify and answer questions that I believe should be addressed in the results section of the paper.
+
+```{r, load-data}
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/raw data/Padilla_DNT60_pmr0_egid.Rdata")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/results/Padilla_DNT60_tcpl_out.Rdata")
+refer_chem <- as.data.table(read.csv("~/Desktop/Stephanie Projects/DNT60 Analysis/results analysis/data/refer_chem.csv"))
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/pipelined data/Padilla_DNT60_tcplfits.rda")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/pipelined data/Padilla_DNT60_rows_n.rda")
+tcpl_out.dt <- as.data.table(DNT60_tcpl_out)
+
+# Remove AUC endpoints from datasets
+AUC <- c("AUC_L","AUC_D","AUC_T")
+tcpl_out.dt <- tcpl_out.dt[!endp%in%AUC]
+refer_chem <- refer_chem[!aenm%in%AUC]
+```
+
+## Discussion of the Activity in Endpoints and Chemicals
+
+### How much activity was observed
+
+Number of chemicals active in at least one endpoint and their chemical names.
+
+```{r, number-of-chms-active}
+chemicals <- tcpl_out.dt[, unique(name)]
+actives <- tcpl_out.dt[hitcall > 0.8, unique(name)]
+print(paste("number active:", length(actives)))
+actives
+```
+
+Percent of test chemicals declared active.
+
+```{r, perc-active}
+( length(actives) / length(chemicals) ) * 100
+```
+
+Chemicals that were "high-confidence" negatives (I don't know what the most appropriate terminology will be, check _Martin et al. 2022_) were negative.
+
+Number of chemical-endpoint pairs active and percent active as a proportion of all tested.
+
+```{r, no-chm-endp-active}
+active_pairs <- tcpl_out.dt[hitcall > 0.8, .N]
+total_pairs <- tcpl_out.dt[, .N]
+perc_pairs_active <- (active_pairs / total_pairs) * 100
+print(paste("Number of pairs active:", active_pairs))
+print(paste("Percent of pairs active:", round(perc_pairs_active,1)))
+```
+
+### How many endpoints were hits for chemicals
+
+```{r, number-of-hits-per-chm}
+tcpl_out.dt[hitcall > 0.8, .N, by = name]
+```
+
+Which chemical was active in the most endpoints?
+
+```{r, chemical-with-most-hits}
+tcpl_out.dt[hitcall > 0.8, .N, by = name][N==max(N), name]
+```
+
+### What chemicals induce the strongest response in endpoints
+
+```{r, potential-reference-chemicals}
+pot_refer_chem <- refer_chem[refer_chem[, .(rowi = .I[abs(rval)==max(abs(rval))]), by=.(aenm)][, rowi]]
+pot_refer_chem
+```
+
+### What does clustering of chemicals reveal about endpoints
+
+```{r, load-BMC-data}
+ac <- c("AUC_L","avgS_L", "avgA_L", "avgJ_L","hbt_L",
+        "strtlA","strtlAavg", "strtlF",
+        "AUC_D", "avgS_D","avgA_D", "avgJ_D", "hbt_D",
+        "AUC_T","avgS_T","AUC_r")
+
+## Gather BMC's
+bmd <- lapply(tcplfits_n, function(chm) unlist(lapply(chm, function(fit) {
+  hitcall <- fit[["summary"]]$hitcall
+  bmd <- fit[["summary"]]$bmd
+  if (!(hitcall>0.8 & !is.na(bmd) & bmd != 0)) {
+    bmd <- 10000
+  }
+  bmd
+})))
+bmd <- do.call("rbind", bmd)
+bmd <- log10(bmd[, ac])
+bmd <- bmd[,-c(1,9,14)]
+
+# Identify active chemicals
+actives <- rownames(bmd)[apply(bmd, 1, function(row) any(row < 4))]
+
+# Isolate data of interest
+to.fit <- bmd
+
+# PBDE-47 name is too long
+rownames(bmd)[6] <- "PBDE-47"
+actives[6] <- "PBDE-47"
+
+
+```
+```{r, layer-matrix}
+# Create a matrix specifying if an up, down, up and down, or down and up arrow should be printed in cells.
+to.fit <- lapply(tcplfits_n, function(chm) chm[-c(1,9,14)])
+layer.mat <- lapply(to.fit, function(chm) unlist(lapply(chm, function(fit) {
+                hitcall <- fit[["summary"]]$hitcall
+                fit_method <- fit[["summary"]]$fit_method
+                dir <- sign(fit[["summary"]]$top)
+                if (hitcall>0.8 & fit_method=="gnls" & dir==1) {
+                  layer <- 0
+                } else if (hitcall>0.8 & fit_method=="gnls" & dir==-1) {
+                  layer <- 1
+                } else if (hitcall>0.8 & dir==1) {
+                  layer <- 2
+                } else if (hitcall>0.8 & dir==-1) {
+                  layer <- 3
+                } else layer <- 4
+              })))
+layer.mat <- do.call("rbind", layer.mat)
+rownames(layer.mat)[6] <- "PBDE-47" # Change PBDE-47 name to match BMD matrix
+layer.mat1 <- layer.mat[actives,]
+```
+```{r, heatmap-legends-labels, warning=FALSE}
+# Column labels
+col_labels <- c(expression("Average Speed in Light"^1), "Average Acceleration in Light", "Average Jerk in Light", expression("Habituation in Light"^3),
+                "Startle Acceleration", "Startle Relative to Avg. Speed in Light", "Startle Fold-Change",
+                expression("Average Speed in Dark"^1), "Average Acceleration in Dark", "Average Jerk in Dark", expression("Habituation in Dark"^3),
+                "Average Speed in Both Phases", expression("AUC in Dark / AUC in Light Ratio"^2)) # Superscripts notate references in poster
+# Legends
+
+# Custom heat legend.
+f2 = circlize::colorRamp2(seq(min(bmd), max(bmd), length = 8), rev(viridis(8)), space = "sRGB")
+heat_lgd = Legend(col_fun = f2,
+                  title = paste0("BMC log(","\U03BC","M)"),
+                  title_position = "lefttop",
+                  legend_width = unit(4,"cm"),
+                  direction = "horizontal")
+# Column annotation by phase legend.
+ann_lgd = Legend(labels = c("Light","Transition","Dark","Light+Dark"),
+                 title = "Phase",
+                 title_position = "leftcenter",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 legend_gp = grid::gpar(fill = c("white","grey","black","red")),
+                 border = TRUE,
+                 nrow = 1,
+                 column_gap = unit(5, 'mm'))
+# Legend for cell signal arrows.
+dir_lgd = Legend(labels = c(paste("\U2191","Gain"),
+                            paste("\U2193","Loss"),
+                            paste("\U21C5","GainLoss"),
+                            paste("\U21F5","LossGain")),
+                 title = "Signal Direction",
+                 labels_gp = gpar(fontsize=8),
+                 title_gp = gpar(fontsize=8),
+                 title_position = "leftcenter",
+                 nrow = 1,
+                 column_gap = unit(0, 'mm')) # Will produce warnings, don't worry.
+lgd_list <- packLegend(ann_lgd, dir_lgd)
+
+# Create column annotation indicating the phase of the LMR that is described.
+column_ha <- ComplexHeatmap::HeatmapAnnotation(Phase = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                                        levels=c("Light","Transition","Dark","Light+Dark")),
+                                               border = TRUE,
+                                               simple_anno_size = unit(0.25, 'cm'),
+                                               col = list(Phase=c("Light"="white",
+                                                                  "Transition"="grey",
+                                                                  "Dark"="black",
+                                                                  "Light+Dark"="red")),
+                                               annotation_legend_param = list(nrow = 1),
+                                               show_annotation_name = FALSE,
+                                               show_legend = FALSE)
+
+# Create function to add arrows indicating signal direction in cells.
+cell_fun <- function(j, i, x, y, width, height, fill) {
+  if (layer.mat1[i,j] == 0) {
+    grid.text("\U21C5", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 1) {
+    grid.text("\U21F5", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 2) {
+    grid.text("\U2191", x, y, gp=gpar(fontsize=6))
+  } else if (layer.mat1[i,j] == 3) {
+    grid.text("\U2193", x, y, gp=gpar(fontsize=6))
+  }
+}
+```
+```{r, heatmap, warning=FALSE}
+# Create main heat map.
+htlist <- ComplexHeatmap::Heatmap(bmd[actives,],
+
+                        # Specify some parameters for heat legend.
+                        name = paste0("BMC log(","\U03BC","M)"),
+                        col = f2,
+                        border_gp = grid::gpar(col="black",lwd=1),
+                        rect_gp=grid::gpar(col="grey"),
+                        show_heatmap_legend = TRUE,
+                        heatmap_legend_param = list(legend_height = unit(3.5,"cm"),
+                                                    direction = "vertical",
+                                                    title_gp = grid::gpar(fontsize=10),
+                                                    labels_gp = grid::gpar(fontsize=10)),
+
+                        # Heatmap width and height
+                        # width = unit(16,"in"),
+                        # height = unit(18,"in"),
+
+                        # Column label parameters
+                        column_labels = col_labels, column_names_rot = 45,
+
+
+                        # Split columns by phase.
+                        column_split = factor(c(rep("Light",4), rep("Transition",3),rep("Dark",4),rep("Light+Dark",2)),
+                                              levels=c("Light","Transition","Dark","Light+Dark")),
+
+                        # Specify some column parameters.
+                        column_title = NULL,
+                        top_annotation = column_ha,
+
+                        # Add signal direction arrows.
+                        cell_fun = cell_fun,
+
+                        # Specify some parameters row dendrogram aesthetics and row labels.
+                        row_title_side = "right",
+                        row_title_rot = 0,
+                        row_split = 5,
+                        row_dend_side = "right",
+                        row_names_side = "left",
+
+                        # Clustering parameters.
+                        cluster_columns = FALSE,
+                        cluster_rows = TRUE,
+                        clustering_distance_rows = "pearson",
+
+                        # Font sizes
+                        row_names_gp = grid::gpar(fontsize=8),
+                        column_names_gp = grid::gpar(fontsize=10),
+                        row_title_gp = grid::gpar(fontsize=10),
+                        column_title_gp = grid::gpar(fontsize=10)
+                        )
+draw(htlist, merge_legend = FALSE, annotation_legend_list = lgd_list,
+     annotation_legend_side = "top", align_annotation_legend = "heatmap_center")
+```
+
+### Where were chemicals active?
+
+Net activity endpoints (avgS_L , avgS_D, or avgS_T).
+
+```{r, chemicals-active-in-avgS}
+tcpl_out.dt[endp%in%c("avgS_L","avgS_D","avgS_T") & hitcall>0.8, unique(name)]
+```
+
+Rate of change of activity.
+
+```{r, chemicals-active-in-avgA}
+tcpl_out.dt[endp%in%c("avgA_L","avgA_D") & hitcall>0.8, unique(name)]
+```
+
+Range of activity.
+
+```{r, chemicals-active-in-hbt}
+tcpl_out.dt[endp%in%c("hbt_L","hbt_D") & hitcall>0.8, unique(name)]
+```
+
+Zebrafish startle.
+
+```{r, chemicals-active-in-strtl}
+tcpl_out.dt[endp%in%c("strtlA","strtlAavg","strtlF") & hitcall>0.8, unique(name)]
+```
+
+### Activity per Endpoint
+
+Number of chemicals active per endpoint.
+
+```{r, no-chms-active-per-endp}
+tcpl_out.dt[hitcall > 0.8, .("no. of chms active"=.N), by = endp]
+```
+
+Most sensitive endpoint.
+
+```{r, max-chms-active-per-endp}
+tcpl_out.dt[hitcall > 0.8, .("no. of chms active"=.N), by = endp][which(`no. of chms active`==max(`no. of chms active`))]
+```
+
+Do chemicals active in avgS_T completely overlap with those active in avgS_D?
+
+```{r, avgS_T-avgS_D-overlap}
+identical(tcpl_out.dt[endp=="avgS_D" & hitcall>0.8, unique(name)],
+          tcpl_out.dt[endp=="avgS_T" & hitcall>0.8, unique(name)])
+```
+
+Acrylamide is active in avgS_D but not avgS_T. Diazepam is active in avgS_T but not avgS_D. So sets are nearly identical implying avgS_D is highly correlated with avgS_T. Diazepam was found active in avgS_L. Since chemicals active in avgS_T were active in either avgS_D or avgS_L this endpoint might be reduntant. Activity in avgS_T could be an indication that avgS_L or avgS_D changed alot, but it was not capable in this dataset to detect changes independently of other avgS endpoints.
+
+Evaluate if avgS_T can be used as an indicator of intense response in one endpoint or the other.
+
+Of the endpoints that we construct how many hits are we seeing.
+
+```{r, max-chms-active-per-new-endp}
+cnstrct_endpoints <- c("avgA_L", "avgJ_L", "hbt_L", "strtlA", "strtlAavg", "strtlF", "avgA_D", "avgJ_D", "hbt_D", "AUC_r")
+tcpl_out.dt[hitcall > 0.8, .("no. of chms active"=.N), by = endp][endp %in% c(cnstrct_endpoints)]
+```
+
+Startle acceleration vs. average is the most sensitive. So we are observing changes in zebrafish startle intensity.
+
+### Noise related to endpoints
+
+Evaluation of CV
+We don't see an association of endpoint sensitivity with endpoint noise
+- We can mention this or simply state that there aren't enough active chemicals to make this evaluation
+
+### What does the number of endpoints a chemical is active in say about the activity of an endpoint
+
+Is it more clear that behavioral profiles are perturbed when many endpoints are active
+- of the chemicals found active in many endpoints are these chemicals substantiated as LMR actives by other laboratories?
+
+### Potency Estimates for Chemicals
+
+Which chemical has the lowest potency estimate? Which chemicals have the lowest median potency estimate?
+
+Order chemicals by their lowest BMC.
+
+```{r, min-BMCs-chm}
+minBMCs <- apply(bmd, 1, min, na.rm=TRUE)
+minBMCs.1 <- minBMCs[minBMCs < 4]
+minBMCs.2 <- 10^(minBMCs.1[order(minBMCs.1)])
+
+minBMCs.2
+```
+
+```{r, min-BMC}
+which( minBMCs == min(minBMCs) )
+```
+
+Bis(tributyltin) Oxide is found to be the most potent chemical. 
+
+Which chemical is most potent when looking at the median of it's active endpoints? Will likely be Bis(tributyltin) Oxide, but observe how ordering changes.
+
+```{r, median-BMCs-chm}
+select <- apply(bmd, 1, function(row) any(row<4))
+med_BMC <- bmd[select,]
+med_BMC[med_BMC==4] <- NA
+
+med_BMC.1 <- apply(med_BMC, 1, median, na.rm=TRUE)
+med_BMC.2 <- 10^(med_BMC.1[order(med_BMC.1)])
+
+data.table("Order by Minimum BMC" = names(minBMCs.2), "Order by Median BMC" = names(med_BMC.2))
+```
+
+Some chemicals positions by highest to lowest potency decrease a lot when median BMC is considered rather than minimum BMC. D-Sorbitol is a noticeable example. For all chemicals evaluate their range of BMC potency metrics. Can we associate a large range of BMCs with spurious activity?
+
+```{r, bmc-ranges}
+range_BMC <- bmd[select,]
+range_BMC[range_BMC==4] <- NA
+select1 <- apply(range_BMC, 1, function(row) sum(is.na(row)) < 12)
+range_BMC1 <- range_BMC[select1,]
+range_BMC2 <- apply(range_BMC1, 1, range, na.rm=TRUE)
+range_BMC3 <- range_BMC2[2,] - range_BMC2[1,]
+
+BMCrange <- data.table("cpid" = names(range_BMC3[order(range_BMC3)]), "BMCrange" = range_BMC3[order(range_BMC3)])
+DT::datatable(BMCrange)
+```
+
+D-sorbitol stands out as having an extreme range of BMC potency estimates. Before we have tried to label D-sorbitol's extreme range of activity as an indication of D-sorbitol's spuriousness. The chemical with the second largest range is Amphetamine, which interestingly enough was the chemical whose concentration response data displayed the poorly modeled gain-loss behavior. What about Diazepam?
+
+```{r, Diazepam-SA-timeSeries}
+chemical <- "Diazepam"
+
+# Units
+unit.t = "min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+prsp = "SA"
+no.A = 10
+
+# Extract chemical data
+group <- unique(data[cpid == chemical, egid])
+
+## Identify movement columns of interest
+t.cols <- grep("vt", names(data), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+
+## extract data to be plotted, exclude acclimation
+to.fit <- data[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+# create appropriate axes titles for plots
+label.y <- "Speed"
+
+# Format data for plotting
+
+## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+exclude.A <- t.cols[!(t.cols%in%A.cols)]
+means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                .SDcols = exclude.A,
+                by = conc]
+
+## calculate CI's for transformed values then transform back
+shift <- 1
+logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+  , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+## elongate means and CIs data, and join
+means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+means_long[, t := sub("vt","",t)]
+CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+CIs_long[, t := sub("vt","",t)]
+stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+stats[, t := as.numeric(t)]
+
+# create standard error of mean estimates by time period and plot as ribbons or error bars
+
+# plot time-series data
+
+## create title, x- and y-axis titles, legend labels, and legend title
+title <- paste0("Sample Averaged Time-Series for ", chemical)
+title.t <- paste0("Time (",unit.t,")")
+title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+title.legend <- paste0("Concentration (", unit.conc, ")")
+
+## get better colors for plotting
+N <- length(unique(to.fit[,conc]))
+colors <- viridis::viridis(N)
+
+## create x-axis breaks and labels
+m <- as.integer(max(means_long[,t]))
+x.breaks <- seq(from=no.A,to=m,by=10)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+## plot
+SAplot_Dzp <- ggplot() +
+          geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+          geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+          scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+          scale_color_manual(values = colors, labels=legend.labels) +
+          geom_ribbon(data = stats,
+                      aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                      alpha = 0.25) +
+          geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+          geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+          annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=5) +
+          scale_fill_manual(values = colors, labels=legend.labels) +
+          labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+               x = title.t, y = title.mean, color = title.legend) +
+          guides(fill = "none") +
+          theme_bw() +
+          theme(text = element_text(size = 18))
+```
+```{r, CPF-active-curves}
+row1_Dzp <- rows_n[[chemical]][["avgS_L"]]
+row2_Dzp <- rows_n[[chemical]][["hbt_L"]]
+row3_Dzp <- rows_n[[chemical]][["avgS_T"]]
+
+fit1_Dzp <- concRespCoreZR(row1_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit2_Dzp <- concRespCoreZR(row2_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit3_Dzp <- concRespCoreZR(row3_Dzp, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+
+# fit1_CPF$theme$text$size = 4
+# fit2_CPF$theme$text$size = 4
+# 
+# fit1_CPF$heme$line$size = 0.15
+```
+```{r, layout-grobs}
+# grobs <- list(SAplot_CPF, fit1_CPF, fit2_CPF)
+# layout <- matrix(c(1,1,1,1,2,3), nrow=3, ncol=2, byrow=TRUE)
+# 
+# gridExtra::grid.arrange(grobs = grobs, layout_matrix = layout)
+```
+```{r, grid-plot, fig.dim=c(17,17)}
+p1 <- cowplot::plot_grid(fit1_Dzp, fit2_Dzp, fit3_Dzp, nrow=2)
+cowplot::plot_grid(SAplot_Dzp, p1, nrow=2)
+```
+
+For Diazepam we can see that the curve-fitting procedure may be erroneously producing low estimates for BMC. This erroneous detection is indicated by the consistency of activity levels in low-concentration treatment groups. This seems to imply that baseline activity levels for Diazepam treated groups and control were different. At high concentration more typical concentration reponse behavior is observed.
+
+So it seems that the range of BMC estimates can be used to assess if any issues are ocurring in the curve-fitting procedure that can be due to curve-fitting inadequacy, 
+spurious activity, or baseline-shift from control to treatment.
+
+Do we see that BMC estimates associated with any particular endpoint tend to be lower than others?
+
+```{r, BMC-by-endp}
+active_BMC <- bmd[select,]
+active_BMC[med_BMC==4] <- NA
+```
+

@@ -1,0 +1,189 @@
+---
+title: "Week of 06/20/2022 - Results Continued"
+author: "Zachary Rowson"
+date: "6/21/2022"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+library(data.table)
+library(ggplot2)
+library(gabi)
+```
+```{r, load-necessary-data}
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/raw data/Padilla_DNT60_pmr0_egid.Rdata")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/pipelined data/Padilla_DNT60_tcplfits.rda")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/results analysis/data/refer_chem.Rdata")
+load("~/Desktop/Stephanie Projects/DNT60 Analysis/pipelining/pipelined data/Padilla_DNT60_rows_n.rda")
+```
+
+## Introduction
+
+Here I will try to address some of the comments made by Stephanie. Specifically, the paper does not address enough the benefits that this analysis procedure provides over the typical analysis procedure of zebrafish LMR data. The typical procedure uses traditional statistical techniques to assess changes in mean response by concentration group. In the typical scenario the response evaluated is Total Distance Traveled or some endpoint that summates movement data over the totality of illumination phases.
+
+Stephanie recommends stressing the multiple endpoint aspect of this procedure, the BMC concentration analysis, the pipelining, and public availability of this procedure.
+
+## What Does Analyzing Data with More Endpoints Provide?
+
+### More Chemicals are Found Active
+
+To address this question I think one of our strongest arguments in favor of this procedure will be demonstrating that the procedure detects more chemicals perturbators of zebrafish behavior. We need to show that the activity we detect is clearly correlated to changes in zebrafish behavior and observed in chemicals that we previously expected to perturb zebrafish behavior or have strong evidence of developmental neurotoxicity. Then we can prove the hypothesis of this paper, that the typical zebrafish LMR data analysis procedure is missing some chemically induced changes in zebrafish behavior.
+
+#### How do we show that detected activity is correlated with changes in zebrafish behavior?
+
+Right now the method I am employing is visual evaluation of the behavioral profiles of zebrafish. For the chemicals that were found active only in endpoints constructed by the paper we can visualize the behavior profiles and make some statement about the visual evidence of changes in zebrafish behavior profiles with increasing concentration. If we can show that behavior profiles appear abnormal and this abnormality occurs in a prototypical concentration-dependent way, we can claim that the additional activity we are seeing appears to reflect clear changes in zebrafish behavior.
+
+```{r, plot-SA-func}
+plot_SA <- function(chemical) {
+              # Units
+              unit.t = "min"
+              unit.mov = "cm"
+              unit.conc = paste0("\U03BC","M")
+              prsp = "SA"
+              no.A = 10
+
+              # Extract chemical data
+              group <- unique(data[cpid == chemical, egid])
+
+              ## Identify movement columns of interest
+              t.cols <- grep("vt", names(data), value = TRUE)
+              cols <- t.cols[(no.A+1):length(t.cols)]
+              A.cols <- t.cols[!(t.cols%in%cols)]
+
+              ## extract data to be plotted, exclude acclimation
+              to.fit <- data[cpid==chemical | (wllt=="v" & egid==group), -A.cols, with=FALSE]
+
+              # create appropriate axes titles for plots
+              label.y <- "Speed"
+
+              # Format data for plotting
+
+              ## calculate mean and 50% CIs for each vector column by concentration group, excluding concentration
+              exclude.A <- t.cols[!(t.cols%in%A.cols)]
+              means <- to.fit[, lapply(.SD, function(col) mean(col,na.rm=T)),
+                              .SDcols = exclude.A,
+                              by = conc]
+
+              ## calculate CI's for transformed values then transform back
+              shift <- 1
+              logCIs <- to.fit[, lapply(.SD, function(x) log10(x+shift)), .SDcols=exclude.A, by=conc][
+                , lapply(.SD, function(x) t.test(x,conf.level=0.50)$conf.int), .SDcols=exclude.A, by=conc]
+              CIs <- logCIs[, lapply(.SD, function(x) (10^x)-shift), by=conc][,lapply(.SD, function(col) abs(diff(col))/2), .SDcols=exclude.A, by=conc]
+
+              ## elongate means and CIs data, and join
+              means_long <- data.table::melt(means, id.vars = "conc", variable.name = "t", value.name = "mean")
+              means_long[, t := sub("vt","",t)]
+              CIs_long <- data.table::melt(CIs, id.vars = "conc", variable.name = "t", value.name = "CI")
+              CIs_long[, t := sub("vt","",t)]
+              stats <- means_long[CIs_long, on = c("conc","t")][, conc := as.factor(conc)]
+              stats[, t := as.numeric(t)]
+
+              # create standard error of mean estimates by time period and plot as ribbons or error bars
+
+              # plot time-series data
+
+              ## create title, x- and y-axis titles, legend labels, and legend title
+              title <- paste0("Sample Averaged Time-Series for ", chemical)
+              title.t <- paste0("Time (",unit.t,")")
+              title.mean <- paste0("Mean ", label.y, " (",unit.mov,"/",unit.t,")")
+              conc.n <- to.fit[wllq==1, .N, by=.(conc)][order(conc)]
+              legend.labels <- paste0(conc.n$conc, ", n=", conc.n$N)
+
+              title.legend <- paste0("Concentration (", unit.conc, ")")
+
+              ## get better colors for plotting
+              N <- length(unique(to.fit[,conc]))
+              colors <- viridis::viridis(N)
+
+              ## create x-axis breaks and labels
+              m <- as.integer(max(means_long[,t]))
+              x.breaks <- seq(from=no.A,to=m,by=10)
+              x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+              x.labels2 <- x.labels1 - 2
+              x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+              ## plot
+              plot <- ggplot() +
+                geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
+                geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
+                scale_x_continuous(breaks = x.breaks, labels = x.labels) +
+                scale_color_manual(values = colors, labels=legend.labels) +
+                geom_ribbon(data = stats,
+                            aes(x=t, ymax=mean+CI, ymin=mean-CI, group=conc, fill=conc),
+                            alpha = 0.25) +
+                geom_rect(aes(xmin=10,xmax=30,ymin=-1.25,ymax=-0.5) ,fill="white", color="black") +
+                geom_rect(aes(xmin=30,xmax=50,ymin=-1.25,ymax=-0.5) ,fill="black", color="black") +
+                annotate("text", x=c(20,40), y=rep(-0.875,2), color=c("black","white"), label=c("Light Phase","Dark Phase"), size=5) +
+                scale_fill_manual(values = colors, labels=legend.labels) +
+                labs(title = title, subtitle = "Acclimation Period Excluded: 50% Confidence Bands",
+                     x = title.t, y = title.mean, color = title.legend) +
+                guides(fill = "none") +
+                theme_bw() +
+                theme(text = element_text(size = 18))
+
+              return(plot)
+}
+```
+```{r, plot-Phenytoin, fig.dim=c(17,17)}
+chemical <- "5,5-Diphenylhydantoin"
+SAplot <- plot_SA(chemical)
+row1 <- rows_n[[chemical]][["avgA_L"]]
+row2 <- rows_n[[chemical]][["avgA_D"]]
+
+fit1 <- concRespCoreZR(row1, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+fit2 <- concRespCoreZR(row2, do.plot = TRUE, verbose.plot = FALSE)[["plot"]]
+
+p1 <- cowplot::plot_grid(fit1, fit2, ncol=2)
+
+cowplot::plot_grid(SAplot, p1, nrow=2)
+```
+
+#### How do we evaluate what we expect chemicals to do in the LMR assay and the evidence of DNT for chemicals?
+
+The procedure I am employing is to look through the literature and assess the profiles of chemicals to see if the chemical's activity makes sense. To evaluate the evidence of chemical activity in zebrafish I am utilizing the results comparison table from Padilla Lab's DNT60 paper and also conducting my own literature review on the 11 chemicals that were additionally active. My literature review is not limited to larval zebrafish and the Light-Dark assay like Padilla's results comparison was. I will be limiting myself to the evaluation of developmental neurotoxicity in zebrafish. 
+
+To assess the evidence of DNT I am looking up the chemicals online to see if they have evidence of neurological activity or have been previously shown to be developmentally neurotoxic as well as comparing chemical activity and potency estimates from the zebrafish and _in vitro_ assays. Chlorpyrifos is a good example as a chemical that was found active only in endpoints added by this work, but has strong outside evidence that substantiates this activity. Chlorpyrifos been banned in many countries due in part to it's DNT effects, found active in many LMR assays across laboratories, and produced AC50s in this analysis similar to _in vitro_ assay AC50s. Thus, our result of observing activity in this chemical with the addition of endpoints seems reasonable.
+
+Another example is 5,5-Diphenylhydantoin which is an anticonvulsant. 5,5-Diphenylhydantoin is certainly neuroactive and has been found to be developmentally toxic. However, information about it's DNT in zebrafish assays is very sparse. One paper observed anxiolytic effect in adult zebrafish without a developmental exposure paradigm. Looking at _in vitro_ assays, there is little evidence of selective neurotoxicity. However, the AC50 for cytotoxicity endpoints is similar to the AC50 effect in the LMR assay. Thus, determining if observed activity makes sense in terms of the chemicals previous evidence of activity in zebrafish assays and other evidence of DNT is more questionable. In this instance we may comment more on the observed profiles of the zebrafish behavior and the potential for developmental effect to bleed into the DNT assay.
+
+### Higher Confidence in Chemical Activity and Potency Estimates
+
+A potential benefit of analyzing LMR data with multiple endpoints that we could investigate is the benefit that analyzing data with multiple endpoints provides to our confidence in a chemical as an active chemical in the LMR assay. I have observed that activity in many endpoints appears to be associated with more visually apparent changes in zebrafish behavior trends. We could combine this observation with an assessment of our prior knowledge on a chemicals DNT and activity in the ZF LMR assay for DNT to evaluate if this chemicals active in many endpoints appear to be high confidence hits or even reference chemicals.
+
+Our argument about why this is better than the previous analysis procedure would be something along the lines of "...the previous analysis procedure was limited to the assessment of activity in one endpoint and the assessment of signal intensity in one endpoint. By evaluating activity and signal intensity across multiple endpoints we can better identify chemicals as clear and strong perturbators of zebrafish behavior. In addition, the production of potency estimates for many endpoints can provide insight into whether or not activity at a particular concentration is clearly evident by evaluating the range of potency estimates across endpoints."
+
+### Behavior Profiles are Described in Greater Detail
+
+Another potential benefit to investigate is how our analysis procedure can better describe the behavior profiles of chemicals. From the endpoint activity profiles and direction of response you can re-construct what chemical exposure is doing to behavior profiles. I will plot the graphic for 5,5-Diphenylhydantoin again to demonstrate. 
+
+```{r, plot-Phenytoin-2, fig.dim=c(17,17)}
+cowplot::plot_grid(SAplot, p1, nrow=2)
+```
+
+Looking at the active endpoints for Phenytoin we see that avgA_L response decreases and avgA_D response increases. Since we have in our head what a typical control sample's behavior profile would look like, we can can reconstruct how the behavior profiles for higher concentration exposure groups appear. A decrease in avgA_L implies that behavior profiles in the Light are likely flattening out from the same starting point. An increase in avgA_D without a change in the zebrafish startle likely implies a flattening of zebrafish activity trends from the same starting point.
+
+The benefit of this will hopefully be more informative clustering of chemicals based upon their activity profiles in endpoints. With the 61 chemical set that we evaluated, this does not seem to be the case, but the argument can be made that with more chemicals we will see other chemicals induce an identical effect on zebrafish behavior profiles in the Dark as 5,5-Diphenylhydantoin. Since this appears to visually be clear evidence of an effect on zebrafish's typical habituation pattern this induced effect may be associated with a unique neurological change in zebrafish.
+
+## What Do We Gain from the Application of BMC Analysis?
+
+I need to read up more on this subject but I am going to jot down my thoughts. 
+
+These arguments will likely be hypothetical without the production of any evidence of the primary benefits of BMC analysis and these arguments will likely reference lots of other papers.
+
+The primary benefit that BMC analysis provides this work is that it removes the limitation of tested-concentrations or reliance on maximal observed response during the estimation of chemical potency. Thus, when we eventually accomplish one of the primary goals of this project, which is integration of the ZF LMR assay for DNT data with other _in vitro_ assays for DNT, the potency estimates from this data will not be restricted by the tested concentrations and tested concentration range. The tested concentrations and tested concentration range could restrict our potency estimates to discrete estimates (LOEL) or to estimates of potency based on chemical efficacy that is not representative of the maximum possible response induced by a chemical (AC50, etc.). 
+
+Since we do not integrate these datasets in this paper or compare our results to another laboratory that also uses BMC analysis, these arguments in favor of our BMC analysis approach will likely be hypothetical.
+
+Another argument in favor of benchmark concentration modeling is that it requires assessment of the concentration-response trend in the data. Compared to typical analysis procedures that simply evaluate pair-wise differences between treatment groups or between treatment and control, this modeling procedure may be more appropriate for toxicology experiments where we expect to see a relationship between response and increasing concentration for effective chemicals.
+
+Modeling of the concentration-response behavior can help us learn about a chemical. For instance from concentration-response modeling we can see that chemicals are monotonically increasing or decreasing an endpoint, or we can observe some gain-loss behavior. Amphetamine is a good example of this. Does the observation of gain-loss behavior during Amphetamine exposure teach us anything about the chemical? Gain-loss concentration-response modeling of Amphetamine allows us to assess the concentration at which effects begin and where the response begins to be lost. This can't really be assessed in a pair-wise analysis procedure. 
+
+### Pipelining and Public Availability
+
+A benefit of this work is that the package and procedure I have developed should be applicable to a Light-Dark assay of any length with any number of Light-Dark transitions (applicable but maybe not optimal). The gabi package is capable of streamlining this procedure for researchers. The pipelining provides an analysis procedure that multiple laboratories could apply to their data and effectively standardize the data analysis procedure. Pipelining would produce results that are more easily comparable across laboratories. 
+
+Pipelining of the zebrafish also makes the zebrafish behavior data uploadable to the ToxCast databases providing ToxCast and eventually CompTox with zebrafish behavioral assays data which it does not currently contain. The wide spread use of tcplfit2 at CCTE makes comparison of these results more comparable to other assays.

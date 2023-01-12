@@ -1,0 +1,164 @@
+---
+title: "Week of 08-22-2022"
+author: "Zachary Rowson"
+date: "8/19/2022"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(data.table)
+library(ggplot2)
+```
+
+## Introduction
+
+In this document I will work on visualizing the information gathered from the literature review. In particular the potencies gathered as LOELs and the amount of information gathered per chemical.
+
+## Graphic 1
+
+Load data for graphics.
+
+```{r, load-literature LOELs}
+load("~/Desktop/StephanieProjects/gabi/Manuscript/tables/compareLOELs.Rdata")
+```
+```{r, create-gabi-LOELs}
+load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_rows_n.rda")
+
+gabiLOELs <- lapply(rows_n, function(chemical) {
+  LOELs <- unlist( lapply(chemical[c(2:8,10:13,15,16)], function(row) {
+        resp <- c(row[["bresp"]], row[["resp"]])
+        conc <- c( rep(0,length(row[["bresp"]])), row[["conc"]] )
+        
+        resp.df <- data.frame(resp=resp, conc=as.factor(conc))
+        pval <- anova( lm(resp ~ conc, data=resp.df) )$`Pr(>F)`[1]
+        
+        if(pval < (0.05/13)) {
+          DTest <- DescTools::DunnettTest(x = resp, g = conc)
+          sigConc <- names( which(DTest$`0`[,4] < 0.05) )
+          sigConc1 <- as.numeric(gsub("-0", "", sigConc))
+          if (length(sigConc1) == 0) {
+            LOEL <- NA
+          } else {
+           LOEL <- log10( min(sigConc1) ) 
+          }
+        } else {
+          LOEL <- NA
+        }
+        
+        LOEL
+      }) )
+  
+  LOELs
+})
+```
+```{r, LOELs-to-dt, warning = FALSE}
+gabiLOELs.dt <- melt( as.data.table(gabiLOELs), variable.name = "cpid", value.name = "conc" )
+
+gabiLOELs.dt[, `:=` (DOI="DNT60", class="intra")]
+studyLOELs <- compareLOELs[neurotox==1 & DOI!="DNT60", .(conc = min(conc)), by = .(cpid,DOI)]
+studyLOELs[, class := "inter"]
+LOELs.dt <- rbind(gabiLOELs.dt, studyLOELs)
+
+litReviewConc <- as.data.table( readxl::read_xlsx("../tables/LitReview Conc.xlsx") )
+litReviewConc[, dev_LOEL := min(.SD[devtox==1,conc]), by=.(cpid)]
+litReviewConc[is.infinite(dev_LOEL), dev_LOEL := NA]
+litReviewConc[, dev_LOEL := log10(dev_LOEL)]
+
+litReviewConc[, neuro_LOEL := min(.SD[neurotox==1,conc]), by=.(cpid,DOI)]
+litReviewConc[is.infinite(neuro_LOEL), neuro_LOEL := NA]
+litReviewConc[, neuro_LOEL := log10(neuro_LOEL)]
+
+LOELs.dt1 <- rbind(litReviewConc[, .(conc = unique(dev_LOEL), class="dev LOEL"), by=.(cpid)], LOELs.dt, fill=TRUE)
+```
+```{r, edit-chemical names}
+LOELs.dt1[cpid == "5, 5-Diphenylhydantoin", cpid := "5,5-Diphenylhydantoin"]
+LOELs.dt1[cpid == "Bis(tributyltin) Oxide", cpid := "Bis(tributyltin) oxide"]
+LOELs.dt1[cpid == "Diethylene Glycol", cpid := "Diethylene glycol"]
+LOELs.dt1[cpid == "Polybrominated diphenyl ether (PBDE)-47", cpid := "Polybrominated diphenyl ether (PBDE)-47"]
+```
+```{r, order-chems-on-devLOEL}
+factor.order <- LOELs.dt1[class=="dev LOEL"][order(conc), cpid]
+LOELs.dt1$cpid <- factor(LOELs.dt1$cpid, levels=factor.order)
+```
+
+Create graphic 1.
+
+```{r, create-graphic1, fig.dim=c(10,10)}
+ggplot() +
+  geom_point(LOELs.dt1, mapping = aes(x=conc, y=cpid, color=class, shape=class), size = 3) +
+  scale_shape_discrete(labels = c("Developmental LOEL","Extra-Lab Neurotoxicity LOELs","Study Neurotoxicity LOELs")) +
+  scale_color_discrete(labels = c("Developmental LOEL","Extra-Lab Neurotoxicity LOELs","Study Neurotoxicity LOELs")) +
+  labs(shape = "Critical Doses",
+       color = "Critical Doses",
+       x = paste0("Concentration (log10(",paste0("\U03BC","M"),"))"),
+       y = "Chemical Name")
+```
+
+```{r, create-graphic1-1, fig.dim=c(10,10)}
+ggplot() +
+  geom_boxplot(LOELs.dt1[class%in%c("intra","inter")], mapping = aes(x=conc, y=cpid, color=class)) +
+  geom_point(LOELs.dt1[class=="dev LOEL"], mapping = aes(x=conc, y=cpid), color = "red", size = 2) +
+  scale_color_discrete(labels = c("Extra-Lab Neurotoxicity LOELs","Study Neurotoxicity LOELs")) +
+  labs(shape = "Critical Doses",
+       color = "Critical Doses",
+       x = paste0("Concentration (log10(",paste0("\U03BC","M"),"))"),
+       y = "Chemical Name")
+```
+
+## Create Graphic 2
+
+Format data to plot medians with inter quartile range as error bars.
+
+```{r, format-data}
+# plot medians with quantiles and interquartile range
+cHairPlot.data1 <- LOELs.dt1[class=="intra", .(med=summary(conc)[3], Q1=summary(conc)[1], Q3=summary(conc)[5]), by=.(cpid)]
+cHairPlot.data2 <- LOELs.dt1[class=="inter", .(med_x=summary(conc)[3], Q1_x=summary(conc)[1], Q3_x=summary(conc)[5]), by=.(cpid)]
+# _x indicates values are derived from "extra" laboratory studies
+
+cHairPlot.data <- merge(cHairPlot.data1, cHairPlot.data2, all = TRUE)
+```
+
+```{r}
+ggplot(cHairPlot.data, aes(x=med, y=med_x)) +
+  geom_point() + 
+  geom_abline(intercept=c(-1,0,1), slope = c(1,1,1), linetype=c("dashed","solid","dashed")) +
+  geom_errorbar(aes(xmin=Q1,xmax=Q3,color=cpid), width=0.2) +
+  geom_errorbar(aes(ymin=Q1_x,ymax=Q3_x,color=cpid), width=0.2) +
+  ggrepel::geom_text_repel(aes(label=cpid,color=cpid), box.padding = 0.5) +
+  lims(x=c(-2,2), y=c(-2,2)) +
+  labs(x = "Median Neurotoxic LOEL Observed in this Study",
+       y = "Median Neurotoxic LOEL Derived from Literature Review Studies",
+       title = "Concordance of Neurotoxic LOELs Across Studies") +
+  theme_bw() +
+  theme(legend.position="none")
+```
+```{r}
+ggplot(cHairPlot.data, aes(x=med, y=med_x)) +
+  geom_point() + 
+  geom_abline(intercept=c(-1,0,1), slope = c(1,1,1), linetype=c("dashed","solid","dashed")) +
+  geom_linerange(aes(xmin=Q1,xmax=Q3,color=cpid)) +
+  geom_linerange(aes(ymin=Q1_x,ymax=Q3_x,color=cpid)) +
+  ggrepel::geom_text_repel(aes(label=cpid,color=cpid), box.padding = 0.5) +
+  lims(x=c(-2,2), y=c(-2,2)) +
+  labs(x = "Median Neurotoxic LOEL Observed in this Study",
+       y = "Median Neurotoxic LOEL Derived from Literature Review Studies",
+       title = "Concordance of Neurotoxic LOELs Across Studies") +
+  theme_bw() +
+  theme(legend.position="none")
+```
+
+```{r}
+ggplot(cHairPlot.data, aes(x=med, y=med_x)) +
+  geom_point() + 
+  geom_abline(intercept=c(-1,0,1), slope = c(1,1,1), linetype=c("dashed","solid","dashed")) +
+  ggrepel::geom_text_repel(aes(label=cpid,color=cpid), box.padding = 0.5) +
+  lims(x=c(-2,2), y=c(-2,2)) +
+  labs(x = "Median Neurotoxic LOEL Observed in this Study",
+       y = "Median Neurotoxic LOEL Derived from Literature Review Studies",
+       title = "Concordance of Neurotoxic LOELs Across Studies") +
+  theme_bw() +
+  theme(legend.position="none")
+```
