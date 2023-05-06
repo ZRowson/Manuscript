@@ -30,7 +30,7 @@ This document will contain all analyses and figures produced in R to be included
 ```{r, load-necessary-data}
 # Raw data, endpoint data, and row objects for tcplfit2
 load("../Data/Padilla_DNT60_lmr0_w_egid.Rdata")
-load("~/Desktop/StephanieProjects/DNT60Analysis/pipelining/pipelined data/Padilla_DNT60_mc0.rda")
+load("../Data/Padilla_DNT60_mc0.rda")
 load("../Data/Padilla_DNT60_mc0_n.rda")
 load("../Data/Padilla_DNT60_rows_n.rda")
 
@@ -56,7 +56,7 @@ load("../Data/Literature Review LOELs and Dev LOELs.Rdata")
 lmr0.egid[cpid=="Chlorpyrifos (ethyl)", cpid := "Chlorpyrifos"]
 ```
 
-```{r, Fluoxetine-SA-timeSeries, include=FALSE}
+```{r, CPF-SA-timeSeries, include=FALSE}
 chemical <- "Chlorpyrifos"
 
 # Units
@@ -127,7 +127,7 @@ x.labels2 <- x.labels1 - 2
 x.labels <- paste(x.labels2, x.labels1, sep="-")
 
 ## plot
-FlxSAplot <- ggplot() +
+CPFSAplot <- ggplot() +
           geom_point(data = stats, aes(x=t, y=mean, color=as.factor(conc))) +
           geom_line(data = stats, aes(x=t, y=mean, color=conc, group=conc)) +
           scale_x_continuous(breaks = x.breaks, labels = x.labels) +
@@ -145,13 +145,13 @@ FlxSAplot <- ggplot() +
           theme_bw() +
           theme(text = element_text(size = 14))
 
-FlxSAplot
+CPFSAplot
 ```
 
 ### Example tcpl Curve-Fit
 
 ```{r, example-curve-fit, warning=FALSE, include=FALSE}
-tcplfit <- tcplfits_n[["Fluoxetine"]][["avgS_L"]]
+tcplfit <- tcplfits_n[["Chlorpyrifos"]][["avgS_L"]]
 tcplfit[["plot"]]
 summary <- subset( tcplfit[["summary"]], select = -c(conc,resp) )
 summary
@@ -161,7 +161,7 @@ summary
 
 ### Appearance of Endpoint Data
 
-#### Figure 2: Typical Raw Movement Data and Effect of Transformation procedure and Fluoxetine Exposure on Distributions of Endpoint Data
+#### Figure 2: Typical Unexposed, Raw Movement Data: The Effect of Transformation on Distributions of Endpoint Data
 
 ```{r, large-ctrl-sample-SAplot}
 # Time Series for Fluoxetine vehicle control

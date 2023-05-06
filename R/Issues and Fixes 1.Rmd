@@ -1,0 +1,277 @@
+---
+title: "Issues for Zach to Work On"
+author: "Zachary Rowson"
+date: "2023-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+```
+
+## Document Description
+
+Here I will be working on issues presented by Kelly Carstens 
+at U.S. EPA. I will present the issue description / request and then provide 
+fixes. If the fix is to be implemented on already existing code in the gabi
+Manuscript Rmarkdown file I will note the line and chunk number of the Manuscript
+Rmarkdown that I am editing.
+
+## Issue 1
+
+Add hitcall results (total hits) for each chemical to the Chemical list 
+table in the Teams folder. Please also fill in the additional columns added 
+(max concentration tested, median BMC, min BMC, SD of BMCs).
+
+```{r, iss1_1}
+DNT60_tcpl_out.dt <- as.data.table(DNT60_tcpl_out) 
+
+chemical_list_add_1 <- unique(DNT60_tcpl_out.dt[,
+                  .(
+                    cpid = name,
+                    hitcall,
+                    BMC = bmd,
+                    hit_sum = count(hitcall>0.8)
+                  ),
+                  by = .(name)][
+     hitcall>0.8, .(
+                    hit_sum,
+                    min_BMC_uM = min(BMC,na.rm=T),
+                    median_BMC_uM = median(BMC,na.rm=T),
+                    SD_BMC_uM = sd(BMC, na.rm=T)
+                  ), 
+     by = .(cpid)]
+)
+```
+```{r, iss1_2}
+chemical_list_add_2 <- lmr0.egid[, .(max_conc_tested_uM = max(conc)), by= .(cpid)]
+
+chemical_list_add <- chemical_list_add_1[chemical_list_add_2, on = .(cpid)]
+write.csv(chemical_list_add, file = "../Data/Fixes/Add to Chemical List.csv")
+```
+
+## Issue 6
+
+Update the raw control analysis with all the controls (not just the controls for 
+Fluoxetine).
+
+Line 166 - 213 of "R Analyses and Figures for Paper.Rmd", Chunk 6
+
+```{r, fix_large-ctrl-sample-SAplot}
+# Time Series for Fluoxetine vehicle control
+
+# Units
+unit.t = "2 min"
+unit.mov = "cm"
+unit.conc = paste0("\U03BC","M")
+no.A = 10
+
+
+# Identify movement columns of interest and extract
+t.cols <- grep("vt", names(lmr0.egid), value = TRUE)
+cols <- t.cols[(no.A+1):length(t.cols)]
+A.cols <- t.cols[!(t.cols%in%cols)]
+to.fit <- lmr0.egid[wllt=="v", -A.cols, with=FALSE]
+
+# Melt data and designate Light and Dark time periods
+to.fit_melt <- melt(to.fit[,-"egid"], id.vars = names(to.fit)[1:9], variable.name = "t", value.name = "speed")
+to.fit_melt[, t := as.factor( gsub("vt","",t) )]
+to.fit_melt[t%in%11:30, phase := "Light"]
+to.fit_melt[t%in%31:50, phase := "Dark"]
+
+# Create title, x- and y-axis titles, legend labels, and legend title
+title.t <- paste0("Time (",unit.t,")")
+label.y <- "Speed"
+title.mean <- paste0(label.y, " (",unit.mov,"/",unit.t,")")
+
+title.legend <- "Experimental Phase"
+
+## Create x-axis breaks and labels
+m <- 50
+x.breaks <- c(11, 20, 30, 40, 50)
+x.labels1 <- 2*seq(from=no.A,to=m,by=10)
+x.labels2 <- x.labels1 - 2
+x.labels <- paste(x.labels2, x.labels1, sep="-")
+
+# Printing of graphic isn't working very well so insert new breaks to make space for edges
+x.breaks <- c(5, x.breaks, 55)
+x.labels <- c("a", x.labels, "b")
+
+## plot
+DNT60_VC_Plot <- ggplot(to.fit_melt) +
+          geom_boxplot(aes(x=t,y=speed,fill=phase)) +
+          scale_x_discrete(breaks = x.breaks, labels = x.labels) +
+          scale_fill_manual(values=c("darkgrey","white")) +
+          labs(x = title.t, y = title.mean, fill = "Experimental Phase") +
+          theme_bw() +
+          theme(text = element_text(size = 26))
+```
+
+Line 215 - 258 of "R Analyses and Figures for Paper.Rmd", Chunk 7
+
+```{r, fix_calculate-speed-data-for-smpl, message = FALSE}
+# Raw endpoint data for Fluoxetine vehicle control
+
+sample_endpoints <- data.table::copy(mc0)
+
+sample_endpoints[c("AUC_L","AUC_D","AUC_T")] = NULL
+for (i in 1:13) {
+  sample_endpoints[[i]][, endp := names(sample_endpoints)[i]]
+}
+
+endp.data <- do.call('rbind', sample_endpoints)
+max.conc <- max( endp.data[cpid=="Fluoxetine", conc] )
+
+raw_stats <- endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(conc)]
+raw_stats_long <- data.table::melt(raw_stats, id.vars = "conc", variable.name = "stat")
+
+FlxAvgS_LPlot <- ggplot(endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"]) +
+  geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+  theme_bw() +
+  theme(text = element_text(size = 26)) +
+  scale_color_manual(values = colors[c(1,5)]) +
+  scale_fill_manual(values = colors[c(1,5)]) +
+  labs(color = paste0("Concentration (", unit.conc, ")"),
+       fill = paste0("Concentration (", unit.conc, ")"),
+       linetype = "",
+       x = "Raw Endpoint Value",
+       y = "Density")
+
+FlxAvgS_LPlot <- FlxAvgS_LPlot + 
+                  geom_vline(data = raw_stats_l, aes(xintercept=value, linetype=stat), color = colors[c(1,5,1,5)], size=1) +
+                  scale_linetype_discrete(labels = c("Mean","Median")) +
+                  scale_y_continuous(labels = c("0.0","0.1","0.2","0.3","")) +
+                  labs(color = paste0("Concentration (", unit.conc, ")"),
+                       fill = paste0("Concentration (", unit.conc, ")"),
+                       linetype = "",
+                       x = "Raw Endpoint Value",
+                       y = NULL)
+
+legend <- cowplot::get_legend(FlxAvgS_LPlot)
+
+FlxAvgS_LPlot <- FlxAvgS_LPlot + theme(legend.position="none")
+```
+
+Line 260 - 299 of "R Analyses and Figures for Paper.Rmd", Chunk 8
+
+```{r, fix_calculate-speed-data-for-smpl_N, message = FALSE}
+sample_endpoints_n <- lapply(mc0_n, function(list) {
+  table <- list[[1]]
+})
+
+sample_endpoints_n[c("AUC_L","AUC_D","AUC_T")] = NULL
+for (i in 1:13) {
+  sample_endpoints_n[[i]][, endp := names(sample_endpoints_n)[i]]
+}
+
+endp.data_n <- do.call('rbind', sample_endpoints_n)
+
+trans_stats <- endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(conc)]
+trans_stats_long <- data.table::melt(trans_stats, id.vars = "conc", variable.name = "stat")
+
+FlxAvgS_LPlot_n <-ggplot(endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][endp == "avgS_L"]) +
+  geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+  theme_bw() +
+  theme(text = element_text(size = 26)) +
+  scale_color_manual(values = colors[c(1,5)]) +
+  scale_fill_manual(values = colors[c(1,5)]) +
+  labs(color = paste0("Concentration (", unit.conc, ")"),
+       fill = paste0("Concentration (", unit.conc, ")"),
+       linetype = "",
+       x = "Transformed Endpoint Value",
+       y = NULL)
+
+FlxAvgS_LPlot_n <- FlxAvgS_LPlot_n + 
+                    geom_vline(data = trans_stats_long, aes(xintercept=value, linetype=stat), color = colors[c(1,5,1,5)], size=1) +
+                    scale_linetype_discrete(labels = c("Mean","Median")) +
+                    labs(color = paste0("Concentration (", unit.conc, ")"),
+                         fill = paste0("Concentration (", unit.conc, ")"),
+                         linetype = "",
+                         x = "Transformed Endpoint Value",
+                         y = NULL)
+
+FlxAvgS_LPlot_n <- FlxAvgS_LPlot_n + theme(legend.position="none")
+```
+
+Line 301 - 309 of "R Analyses and Figures for Paper.Rmd", Chunk 9
+
+```{r, plot-Flx-data, fig.dim=c(19,13), message = FALSE}
+FlxEndpPlots <- cowplot::plot_grid(FlxAvgS_LPlot, FlxAvgS_LPlot_n,
+                   labels = list("B","C"), label_size = 24)
+FlxEndpPlots1 <- cowplot::plot_grid(FlxEndpPlots, legend, rel_widths = c(3, 1))
+FlxPlots <- cowplot:::plot_grid(DNT60_VC_Plot, FlxEndpPlots1,
+                    labels = list("A"), label_size = 24,
+                    ncol = 1)
+FlxPlots
+```
+
+Line 313 - 335 of "R Analyses and Figures for Paper.Rmd", Chunk 10
+
+```{r, fix_plot-endpoint-data-for-smpl, fig.dim=c(10,10), message = FALSE}
+# Raw endpoint data for Fluoxetine vehicle control
+raw_stats1 <- endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(endp,conc)]
+raw_stats1_long <- data.table::melt(raw_stats1, id.vars = c("endp","conc"), variable.name = "stat")
+
+raw_plot_facet <- ggplot(endp.data[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")]) +
+                    geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+                    theme_bw() +
+                    theme(text = element_text(size = 16)) +
+                    facet_wrap(~endp, scales = "free") +
+                    scale_color_manual(values = colors[c(1,5)]) +
+                    scale_fill_manual(values = colors[c(1,5)])
+
+raw_plot_facet <- raw_plot_facet + 
+                    geom_vline(data = raw_stats1_l, aes(xintercept=value, linetype=stat), color = rep(colors[c(1,5)],26), size=1) +
+                                scale_linetype_discrete(labels = c("Mean","Median")) +
+                                labs(title = "Raw Endpoint Data for DNT60 Screening Vehicle Control and High Fluoxetine Concentration Group",
+                                       color = paste0("Concentration (", unit.conc, ")"),
+                                       fill = paste0("Concentration (", unit.conc, ")"),
+                                       x = "Raw Endpoint Value",
+                                       y = "Density")
+raw_plot_facet
+```
+
+Line 339 - 344 of "R Analyses and Figures for Paper.Rmd", Chunk 11
+
+```{r, SPT1-means-var-raw}
+sample.endp.stats <- endp.data[wllt=="v", .(mean=mean(rval,na.rm=T), variance=stats::var(rval,na.rm=T)), by=.(endp)]
+sample.endp.stats[, `:=` (mean = signif(mean,digits=3), variance = signif(variance,digits=3))]
+DT::datatable(sample.endp.stats, colnames=c("Endpoint Abbreviation","Mean","Variance"),
+              caption = "Raw Endpoint Data Statistics for DNT60 Screening Vehicle Control")
+```
+
+Line 348 - 370 of "R Analyses and Figures for Paper.Rmd", Chunk 12
+
+```{r, plot-transf-endpoint-data-for-smpl, fig.dim=c(10,10), message = FALSE}
+trans_stats1 <- endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")][, .(mean=mean(rval,na.rm=T),median=median(rval,na.rm=T)), by=.(endp,conc)]
+trans_stats1_long <- data.table::melt(trans_stats1, id.vars = c("endp","conc"), variable.name = "stat")
+
+trans_plot_facet <- ggplot(endp.data_n[wllt=="v" | (conc==max.conc & cpid=="Fluoxetine")]) +
+                      geom_density(aes(x=rval, fill=as.factor(conc), color = as.factor(conc)), alpha = 0.5) +
+                      theme_bw() +
+                      theme(text = element_text(size = 16)) +
+                      facet_wrap(~endp, scales = "free") +
+                      scale_color_manual(values = colors[c(1,5)]) +
+                      scale_fill_manual(values = colors[c(1,5)])
+
+trans_plot_facet <- trans_plot_facet + 
+                      geom_vline(data = trans_stats1_long, aes(xintercept=value, linetype=stat), color = rep(colors[c(1,5)],26), size=1) +
+                                scale_linetype_discrete(labels = c("Mean","Median")) +
+                                labs(title = "Transformed Endpoint Data for DNT60 Screening Vehicle Control and High Fluoxetine Concentration Group",
+                                       color = paste0("Concentration (", unit.conc, ")"),
+                                       fill = paste0("Concentration (", unit.conc, ")"),
+                                       x = "Raw Endpoint Value",
+                                       y = "Density")
+
+trans_plot_facet
+```
+
+Line 374 - 379 of "R Analyses and Figures for Paper.Rmd", Chunk 13
+
+```{r, SPT1-means-var-raw}
+sample.endp.stats_n <- endp.data_n[wllt=="v", .(mean=mean(rval,na.rm=T), variance=stats::var(rval,na.rm=T)), by=.(endp)]
+sample.endp.stats_n[, `:=` (mean = signif(mean,digits=3), variance = signif(variance,digits=3))]
+DT::datatable(sample.endp.stats_n, colnames=c("Endpoint Abbreviation","Mean","Variance"),
+              caption = "Transformed Endpoint Data Statistics for DNT60 Screening Vehicle Control")
+```
